@@ -1,7 +1,7 @@
--- Violence District | Menu v1.1 by jeysar
+-- Violence District | Menu v1.2 by jeysar
 -- Tab: ESP, Visual, Settings
 
-local VERSION = "v1.1"
+local VERSION = "v1.2"
 
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
@@ -31,8 +31,7 @@ local CONFIG_FILE = "ViolenceDistrict_config.json"
 local config = {
     aura = false,
     name = false,
-    pallet = false,
-    window = false,
+    eyes = false,
     generator = false,
     genProgress = true,
     fullbright = false,
@@ -263,7 +262,7 @@ local OBJ_COLORS = {pallet = COLOR_PALLET, window = COLOR_WINDOW, generator = CO
 
 -- Filter berdasarkan struktur map (dari data perk):
 --   Pallet asli  : Workspace.Map.pallets.<Newpallet>
---   Window asli  : Workspace.Map.Window.Bottom
+--   Window asli  : part di dalam Workspace.Map.Window
 --   Generator    : Model dengan atribut RepairProgress
 local function getKind(inst)
     if inst:IsA("Model") then
@@ -277,7 +276,7 @@ local function getKind(inst)
     if (inst:IsA("Model") or inst:IsA("BasePart")) and parentName == "pallets" then
         return "pallet"
     end
-    if inst:IsA("BasePart") and inst.Name == "Bottom" and parentName == "window" then
+    if inst:IsA("BasePart") and parentName == "window" then
         return "window"
     end
     return nil
@@ -311,8 +310,7 @@ local function applyObj(inst)
     if objESP[inst] then return end
     local kind = getKind(inst)
     if not kind then return end
-    if (kind == "pallet" and not config.pallet)
-        or (kind == "window" and not config.window)
+    if ((kind == "pallet" or kind == "window") and not config.eyes)
         or (kind == "generator" and not config.generator) then
         return
     end
@@ -325,17 +323,33 @@ local function applyObj(inst)
     end
 
     local color = OBJ_COLORS[kind]
-    local hl = make("Highlight", {
-        Name = "VD_Obj",
-        FillColor = color,
-        FillTransparency = 0.6,
-        OutlineColor = color,
-        OutlineTransparency = 0,
-        DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,
-        Adornee = inst,
-    }, gui) -- ditaruh di gui biar map nggak ke-modif
+    local hl, vizProp
+    if kind == "window" then
+        -- BoxHandleAdornment (mirip visual perk); Highlight di part window tipis nggak kelihatan
+        hl = make("BoxHandleAdornment", {
+            Name = "VD_Obj",
+            Adornee = inst,
+            Size = inst.Size,
+            Color3 = color,
+            Transparency = 0.55,
+            AlwaysOnTop = true,
+            ZIndex = 5,
+        }, gui)
+        vizProp = "Visible"
+    else
+        hl = make("Highlight", {
+            Name = "VD_Obj",
+            FillColor = color,
+            FillTransparency = 0.6,
+            OutlineColor = color,
+            OutlineTransparency = 0,
+            DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,
+            Adornee = inst,
+        }, gui) -- ditaruh di gui biar map nggak ke-modif
+        vizProp = "Enabled"
+    end
 
-    local d = {hl = hl, kind = kind, conns = {}, done = false}
+    local d = {hl = hl, vizProp = vizProp, kind = kind, conns = {}, done = false}
     objESP[inst] = d
 
     table.insert(d.conns, inst.AncestryChanged:Connect(function()
@@ -355,12 +369,12 @@ end
 
 local function refreshObjs()
     for inst in pairs(objESP) do removeObj(inst) end
-    if not (config.pallet or config.window or config.generator) then return end
+    if not (config.eyes or config.generator) then return end
     for _, d in ipairs(workspace:GetDescendants()) do applyObj(d) end
 end
 
 table.insert(connections, workspace.DescendantAdded:Connect(function(d)
-    if config.pallet or config.window or config.generator then
+    if config.eyes or config.generator then
         task.defer(applyObj, d)
     end
 end))
@@ -426,7 +440,7 @@ table.insert(connections, RunService.Heartbeat:Connect(function(dt)
         if visible and maxD > 0 and rootPos then
             visible = (inst:GetPivot().Position - rootPos).Magnitude <= maxD
         end
-        d.hl.Enabled = visible
+        d.hl[d.vizProp] = visible
     end
 end))
 
@@ -728,11 +742,10 @@ createSection(espPage, "Player")
 createToggle(espPage, "Aura Player", "aura", refreshAll)
 createToggle(espPage, "Nama & Jarak", "name", refreshAll)
 createSection(espPage, "Objek")
-createToggle(espPage, "Pallet", "pallet", refreshObjs)
-createToggle(espPage, "Window", "window", refreshObjs)
+createToggle(espPage, "Eyes of Heaven", "eyes", refreshObjs)
 createToggle(espPage, "Generator", "generator", refreshObjs)
 createToggle(espPage, "Warna Progress Gen", "genProgress", refreshGenColors)
-createInfo(espPage, "Putih = Survivor | Merah = Killer | Kuning = Pallet | Biru = Window\nGenerator: merah (baru) > kuning > hijau (hampir selesai), hilang kalau sudah beres.")
+createInfo(espPage, "Putih = Survivor | Merah = Killer\nEyes of Heaven: pallet (kuning) + window (biru), gaya perk tapi lokal.\nGenerator: merah (baru) > kuning > hijau (hampir selesai), hilang kalau sudah beres.")
 
 -- Tab: Visual
 local visualPage = createTab("Visual")
