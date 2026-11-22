@@ -333,15 +333,39 @@ local function applyObj(inst)
     local color = OBJ_COLORS[kind]
     local hl, vizProp
     if kind == "window" then
-        -- SelectionBox: cuma garis pinggir (outline), tanpa isi, jadi nggak nutupin layar
-        hl = make("SelectionBox", {
-            Name = "VD_Obj",
-            Adornee = inst,
-            Color3 = color,
-            LineThickness = 0.025,
-            SurfaceTransparency = 1,
-            Transparency = 0,
-        }, gui)
+        -- Wireframe: 12 garis tepi (BoxHandleAdornment tipis), tanpa isi, tembus tembok
+        local edges = {}
+        local sz = inst.Size
+        local t = 0.15
+        for ax = 1, 3 do
+            for _, sa in ipairs({-1, 1}) do
+                for _, sb in ipairs({-1, 1}) do
+                    local size, off
+                    if ax == 1 then
+                        size = Vector3.new(sz.X, t, t); off = Vector3.new(0, sa * sz.Y / 2, sb * sz.Z / 2)
+                    elseif ax == 2 then
+                        size = Vector3.new(t, sz.Y, t); off = Vector3.new(sa * sz.X / 2, 0, sb * sz.Z / 2)
+                    else
+                        size = Vector3.new(t, t, sz.Z); off = Vector3.new(sa * sz.X / 2, sb * sz.Y / 2, 0)
+                    end
+                    table.insert(edges, make("BoxHandleAdornment", {
+                        Name = "VD_Obj",
+                        Adornee = inst,
+                        Size = size,
+                        CFrame = CFrame.new(off),
+                        Color3 = color,
+                        Transparency = 0,
+                        AlwaysOnTop = true,
+                        ZIndex = 5,
+                    }, gui))
+                end
+            end
+        end
+        hl = setmetatable({
+            Destroy = function() for _, e in ipairs(edges) do e:Destroy() end end,
+        }, {__newindex = function(_, k, v)
+            if k == "Visible" then for _, e in ipairs(edges) do e.Visible = v end end
+        end})
         vizProp = "Visible"
     else
         hl = make("Highlight", {
@@ -376,10 +400,10 @@ local function applyObj(inst)
             BorderSizePixel = 0,
         }, d.bb)
         corner(bg, 4)
-        stroke(bg, 0.3, COLOR_GENERATOR)
+        stroke(bg, 0.3, COLOR_PALLET)
         d.fill = make("Frame", {
             Size = UDim2.new(0, 0, 1, 0),
-            BackgroundColor3 = COLOR_GENERATOR,
+            BackgroundColor3 = COLOR_PALLET,
             BorderSizePixel = 0,
         }, bg)
         corner(d.fill, 4)
@@ -789,7 +813,7 @@ createSection(espPage, "Objek")
 createToggle(espPage, "Eyes of Heaven", "eyes", refreshObjs)
 createToggle(espPage, "Generator", "generator", refreshObjs)
 createToggle(espPage, "Progress Gen (%)", "genProgress", refreshGenColors)
-createInfo(espPage, "Putih = Survivor | Merah = Killer\nEyes of Heaven: pallet (kuning) + window (kuning, outline), gaya perk tapi lokal.\nGenerator: ungu + bar progress %, hilang kalau sudah beres.")
+createInfo(espPage, "Putih = Survivor | Merah = Killer\nEyes of Heaven: pallet (kuning) + window (kuning, outline), gaya perk tapi lokal.\nGenerator: ungu + bar progress % (kuning), hilang kalau sudah beres.")
 
 -- Tab: Visual
 local visualPage = createTab("Visual")
