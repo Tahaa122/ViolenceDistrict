@@ -21,6 +21,7 @@ local COLOR_SURVIVOR = Color3.fromRGB(255, 255, 255)
 local COLOR_KILLER = Color3.fromRGB(255, 50, 50)
 local COLOR_PALLET = Color3.fromRGB(255, 200, 0)
 local COLOR_GENERATOR = Color3.fromRGB(80, 255, 120)
+local COLOR_WINDOW = Color3.fromRGB(0, 170, 255)
 local TOGGLE_KEY = Enum.KeyCode.RightShift
 local FULL_SIZE = UDim2.new(0, 440, 0, 290)
 local MINI_SIZE = UDim2.new(0, 440, 0, 34)
@@ -31,6 +32,7 @@ local config = {
     aura = false,
     name = false,
     pallet = false,
+    window = false,
     generator = false,
     genProgress = true,
     fullbright = false,
@@ -257,14 +259,26 @@ local function progressColor(progress)
     return yellow:Lerp(green, (t - 0.5) * 2)
 end
 
+local OBJ_COLORS = {pallet = COLOR_PALLET, window = COLOR_WINDOW, generator = COLOR_GENERATOR}
+
+-- Filter berdasarkan struktur map (dari data perk):
+--   Pallet asli  : Workspace.Map.pallets.<Newpallet>
+--   Window asli  : Workspace.Map.Window.Bottom
+--   Generator    : Model dengan atribut RepairProgress
 local function getKind(inst)
     if inst:IsA("Model") then
         if inst:GetAttribute("RepairProgress") ~= nil or inst.Name == "Generator" then
             return "generator"
         end
     end
-    if (inst:IsA("Model") or inst:IsA("BasePart")) and string.find(string.lower(inst.Name), "pallet") then
+    local parent = inst.Parent
+    if not parent then return nil end
+    local parentName = string.lower(parent.Name)
+    if (inst:IsA("Model") or inst:IsA("BasePart")) and parentName == "pallets" then
         return "pallet"
+    end
+    if inst:IsA("BasePart") and inst.Name == "Bottom" and parentName == "window" then
+        return "window"
     end
     return nil
 end
@@ -297,7 +311,9 @@ local function applyObj(inst)
     if objESP[inst] then return end
     local kind = getKind(inst)
     if not kind then return end
-    if (kind == "pallet" and not config.pallet) or (kind == "generator" and not config.generator) then
+    if (kind == "pallet" and not config.pallet)
+        or (kind == "window" and not config.window)
+        or (kind == "generator" and not config.generator) then
         return
     end
 
@@ -308,7 +324,7 @@ local function applyObj(inst)
         p = p.Parent
     end
 
-    local color = kind == "pallet" and COLOR_PALLET or COLOR_GENERATOR
+    local color = OBJ_COLORS[kind]
     local hl = make("Highlight", {
         Name = "VD_Obj",
         FillColor = color,
@@ -339,12 +355,12 @@ end
 
 local function refreshObjs()
     for inst in pairs(objESP) do removeObj(inst) end
-    if not (config.pallet or config.generator) then return end
+    if not (config.pallet or config.window or config.generator) then return end
     for _, d in ipairs(workspace:GetDescendants()) do applyObj(d) end
 end
 
 table.insert(connections, workspace.DescendantAdded:Connect(function(d)
-    if config.pallet or config.generator then
+    if config.pallet or config.window or config.generator then
         task.defer(applyObj, d)
     end
 end))
@@ -713,9 +729,10 @@ createToggle(espPage, "Aura Player", "aura", refreshAll)
 createToggle(espPage, "Nama & Jarak", "name", refreshAll)
 createSection(espPage, "Objek")
 createToggle(espPage, "Pallet", "pallet", refreshObjs)
+createToggle(espPage, "Window", "window", refreshObjs)
 createToggle(espPage, "Generator", "generator", refreshObjs)
 createToggle(espPage, "Warna Progress Gen", "genProgress", refreshGenColors)
-createInfo(espPage, "Putih = Survivor | Merah = Killer | Kuning = Pallet\nGenerator: merah (baru) > kuning > hijau (hampir selesai), hilang kalau sudah beres.")
+createInfo(espPage, "Putih = Survivor | Merah = Killer | Kuning = Pallet | Biru = Window\nGenerator: merah (baru) > kuning > hijau (hampir selesai), hilang kalau sudah beres.")
 
 -- Tab: Visual
 local visualPage = createTab("Visual")
