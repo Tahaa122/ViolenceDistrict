@@ -1,5 +1,5 @@
 -- Violence District | Menu v1.2 by jeysar
--- Tab: ESP, Visual, Settings
+-- Tab: Main, ESP, Visual, Settings
 
 local VERSION = "v1.3"
 
@@ -25,6 +25,7 @@ local TOGGLE_KEY = Enum.KeyCode.RightShift
 local FULL_SIZE = UDim2.new(0, 440, 0, 290)
 local MINI_SIZE = UDim2.new(0, 440, 0, 34)
 local DISTANCE_PRESETS = {100, 150, 250, 0} -- 0 = tanpa batas
+local VAULT_PRESETS = {1.5, 1.7, 2.0, 2.5, 3.0}
 local CONFIG_FILE = "ViolenceDistrict_config.json"
 
 local config = {
@@ -35,6 +36,7 @@ local config = {
     genProgress = true,
     fullbright = false,
     fastVault = false,
+    vaultSpeed = 2.0,
     nofog = false,
     distance = 150,
 }
@@ -475,11 +477,11 @@ table.insert(connections, RunService.Heartbeat:Connect(function(dt)
 end))
 
 ----------------------------------------------------------------
--- Fast Vault (percepat animasi vault window, lokal)
+-- Fast Vault (percepat animasi vault window & pallet, lokal)
 ----------------------------------------------------------------
--- dari log: animasi vault = "WalkingVaultAnimation", game sendiri pakai speed 1.0 (slow) / 1.7 (medium)
-local VAULT_SPEED = 2.0
-local VAULT_KEYWORDS = {"vaultanimation"}
+-- dari log: animasi vault window = "WalkingVaultAnimation"; game sendiri pakai speed 1.0 (slow) / 1.7 (medium)
+-- kecepatan diatur di tab Main (config.vaultSpeed)
+local VAULT_KEYWORDS = {"vault", "pallet"}
 local seenTracks = {}
 
 table.insert(connections, RunService.Heartbeat:Connect(function()
@@ -492,11 +494,11 @@ table.insert(connections, RunService.Heartbeat:Connect(function()
         local name = string.lower(track.Name)
         if not seenTracks[name] then
             seenTracks[name] = true
-            print("[VD] animasi terdeteksi:", track.Name) -- cek di F9 buat nyari nama animasi vault
+            print("[VD] animasi terdeteksi:", track.Name) -- cek di F9 buat nyari nama animasi pallet
         end
         for _, kw in ipairs(VAULT_KEYWORDS) do
             if string.find(name, kw, 1, true) then
-                if track.Speed ~= VAULT_SPEED then track:AdjustSpeed(VAULT_SPEED) end
+                if track.Speed ~= config.vaultSpeed then track:AdjustSpeed(config.vaultSpeed) end
                 break
             end
         end
@@ -795,6 +797,25 @@ end
 ----------------------------------------------------------------
 -- GUI: Isi Tab
 ----------------------------------------------------------------
+-- Tab: Main
+local mainPage = createTab("Main")
+createSection(mainPage, "Gerakan")
+createToggle(mainPage, "Fast Vault (Window & Pallet)", "fastVault")
+
+local function vaultSpeedText()
+    return "Speed Vault: " .. string.format("%.1f", config.vaultSpeed) .. "x"
+end
+
+createButton(mainPage, vaultSpeedText(), function(btn)
+    local idx = table.find(VAULT_PRESETS, config.vaultSpeed) or 0
+    idx = idx % #VAULT_PRESETS + 1
+    config.vaultSpeed = VAULT_PRESETS[idx]
+    btn.Text = vaultSpeedText()
+    saveConfig()
+    notify(vaultSpeedText())
+end)
+createInfo(mainPage, "Mempercepat animasi vault (lokal). Game sendiri pakai 1.0x (jalan) dan 1.7x (lari). Makin tinggi makin besar risiko kena anticheat.\nKalau pallet nggak ngaruh, cek nama animasinya di F9 console ([VD] animasi terdeteksi).")
+
 -- Tab: ESP
 local espPage = createTab("ESP")
 createSection(espPage, "Player")
@@ -815,9 +836,6 @@ end)
 createToggle(visualPage, "No Fog", "nofog", function(s)
     if not s then restoreFog() end
 end)
-createSection(visualPage, "Gerakan")
-createToggle(visualPage, "Fast Vault Window", "fastVault")
-createInfo(visualPage, "Mempercepat animasi vault window (lokal). Kalau nggak ngaruh, cek nama animasi di F9 console.")
 
 -- Tab: Settings
 local settingsPage = createTab("Settings")
@@ -842,7 +860,7 @@ createButton(settingsPage, "Simpan Config", function()
 end)
 createInfo(settingsPage, "Toggle otomatis tersimpan.\nRightShift = show/hide panel (PC)\nBatas jarak membantu menghindari limit Highlight Roblox (~31).")
 
-selectTab("ESP")
+selectTab("Main")
 
 ----------------------------------------------------------------
 -- Minimize / Unload / Keybind / Drag
