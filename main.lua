@@ -1,5 +1,5 @@
 -- Violence District | Tabbed Menu by jeysar
--- Tab: ESP (Aura / Name / Pallet / Window), Misc
+-- Tab: ESP (Aura / Name / Pallet / Window / Generator), Misc
 
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
@@ -19,6 +19,7 @@ local COLOR_SURVIVOR = Color3.fromRGB(255, 255, 255)
 local COLOR_KILLER = Color3.fromRGB(255, 50, 50)
 local COLOR_PALLET = Color3.fromRGB(255, 200, 0)
 local COLOR_WINDOW = Color3.fromRGB(0, 170, 255)
+local COLOR_GENERATOR = Color3.fromRGB(80, 255, 120)
 local TOGGLE_KEY = Enum.KeyCode.RightShift
 local FULL_SIZE = UDim2.new(0, 400, 0, 250)
 local MINI_SIZE = UDim2.new(0, 400, 0, 34)
@@ -161,14 +162,16 @@ gui.Parent = parentGui
 -- ESP Object: Pallet & Window
 -- (harus di bawah pembuatan `gui` karena label ditaruh di sana)
 ----------------------------------------------------------------
-local palletOn, windowOn = false, false
+local palletOn, windowOn, genOn = false, false, false
 local objESP = {}
+local OBJ_COLORS = {pallet = COLOR_PALLET, window = COLOR_WINDOW, generator = COLOR_GENERATOR}
 
 local function getKind(inst)
     if not (inst:IsA("Model") or inst:IsA("BasePart")) then return nil end
     local n = string.lower(inst.Name)
     if string.find(n, "pallet") then return "pallet" end
     if string.find(n, "window") then return "window" end
+    if string.find(n, "generator") then return "generator" end
     return nil
 end
 
@@ -176,7 +179,7 @@ local function removeObj(inst)
     local d = objESP[inst]
     if d then
         if d.conn then d.conn:Disconnect() end
-        if d.billboard then d.billboard:Destroy() end
+        if d.highlight then d.highlight:Destroy() end
         objESP[inst] = nil
     end
 end
@@ -185,7 +188,7 @@ local function applyObj(inst)
     if objESP[inst] then return end
     local kind = getKind(inst)
     if not kind then return end
-    if (kind == "pallet" and not palletOn) or (kind == "window" and not windowOn) then return end
+    if (kind == "pallet" and not palletOn) or (kind == "window" and not windowOn) or (kind == "generator" and not genOn) then return end
 
     -- skip kalau induknya udah ke-track (biar nggak dobel)
     local p = inst.Parent
@@ -194,46 +197,33 @@ local function applyObj(inst)
         p = p.Parent
     end
 
-    local part = inst:IsA("BasePart") and inst or inst:FindFirstChildWhichIsA("BasePart", true)
-    if not part then return end
+    local color = OBJ_COLORS[kind]
 
-    local color = kind == "pallet" and COLOR_PALLET or COLOR_WINDOW
-
-    local bb = Instance.new("BillboardGui")
-    bb.Name = "VD_Obj"
-    bb.Size = UDim2.new(0, 70, 0, 16)
-    bb.AlwaysOnTop = true
-    bb.StudsOffset = Vector3.new(0, 2, 0)
-    bb.MaxDistance = 400
-    bb.Adornee = part
-    bb.Parent = gui
-
-    local lbl = Instance.new("TextLabel")
-    lbl.Size = UDim2.new(1, 0, 1, 0)
-    lbl.BackgroundTransparency = 1
-    lbl.Text = kind == "pallet" and "Pallet" or "Window"
-    lbl.TextColor3 = color
-    lbl.TextStrokeColor3 = Color3.new(0, 0, 0)
-    lbl.TextStrokeTransparency = 0
-    lbl.Font = Enum.Font.GothamBold
-    lbl.TextSize = 12
-    lbl.Parent = bb
+    local hl = Instance.new("Highlight")
+    hl.Name = "VD_Obj"
+    hl.FillColor = color
+    hl.FillTransparency = 0.6
+    hl.OutlineColor = color
+    hl.OutlineTransparency = 0
+    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Adornee = inst
+    hl.Parent = gui -- taruh di gui lu biar map nggak ke-modif
 
     local conn = inst.AncestryChanged:Connect(function()
         if not inst:IsDescendantOf(workspace) then removeObj(inst) end
     end)
 
-    objESP[inst] = {billboard = bb, conn = conn}
+    objESP[inst] = {highlight = hl, conn = conn}
 end
 
 local function refreshObjs()
     for inst in pairs(objESP) do removeObj(inst) end
-    if not (palletOn or windowOn) then return end
+    if not (palletOn or windowOn or genOn) then return end
     for _, d in ipairs(workspace:GetDescendants()) do applyObj(d) end
 end
 
 table.insert(connections, workspace.DescendantAdded:Connect(function(d)
-    if palletOn or windowOn then
+    if palletOn or windowOn or genOn then
         task.defer(applyObj, d)
     end
 end))
@@ -488,7 +478,8 @@ createToggle(espPage, "Aura Player", function(s) auraOn = s; refreshAll() end)
 createToggle(espPage, "Nama Player", function(s) nameOn = s; refreshAll() end)
 createToggle(espPage, "Pallet", function(s) palletOn = s; refreshObjs() end)
 createToggle(espPage, "Window", function(s) windowOn = s; refreshObjs() end)
-createInfo(espPage, "Putih = Survivor | Merah = Killer | Kuning = Pallet | Biru = Window")
+createToggle(espPage, "Generator", function(s) genOn = s; refreshObjs() end)
+createInfo(espPage, "Putih = Survivor | Merah = Killer | Kuning = Pallet | Biru = Window | Hijau = Generator")
 
 -- Tab: Misc
 local miscPage = createTab("Misc")
@@ -511,7 +502,7 @@ end)
 
 closeBtn.MouseButton1Click:Connect(function()
     auraOn, nameOn = false, false
-    palletOn, windowOn = false, false
+    palletOn, windowOn, genOn = false, false, false
     for p in pairs(espData) do removeESP(p) end
     for inst in pairs(objESP) do removeObj(inst) end
     setFullbright(false)
