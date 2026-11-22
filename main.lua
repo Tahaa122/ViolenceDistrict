@@ -37,8 +37,8 @@ local FULL_SIZE = UDim2.new(0, 440, 0, 290)
 local MINI_SIZE = UDim2.new(0, 440, 0, 34)
 local DISTANCE_PRESETS = {100, 150, 250, 0} -- 0 = tanpa batas
 local VAULT_PRESETS = {1.5, 1.7, 2.0, 2.5, 3.0}
--- batas atas animasi window (vault "fast" bawaan game ~0.55s dari animasi 1.42s)
-local WINDOW_MAX_SPEED = 2.6
+-- batas atas speed animasi window (ikut preset tertinggi: 3.0x)
+local WINDOW_MAX_SPEED = 3.0
 local CONFIG_FILE = "ViolenceDistrict_config.json"
 
 local DEFAULTS = {
@@ -1031,7 +1031,7 @@ createCycle(mainPage, "vaultSpeed", VAULT_PRESETS, function()
     return "Speed Vault: " .. string.format("%.1f", config.vaultSpeed) .. "x"
 end)
 createToggle(mainPage, "Info Vault (tier)", "vaultInfo")
-createInfo(mainPage, "Fast Vault cuma mempercepat ANIMASI (window max 2.6x); durasi vault asli diatur game per tier. Vault beneran cepat (tier FAST) didapat kalau lari kenceng + lurus ke jendela. Info Vault nunjukin tier & alasannya tiap vault: kurang kenceng / kurang lurus.")
+createInfo(mainPage, "Fast Vault cuma mempercepat ANIMASI (window max 3.0x); durasi vault asli diatur game per tier. Vault beneran cepat (tier FAST) didapat kalau lari kenceng + lurus ke jendela. Info Vault nunjukin tier & alasannya tiap vault: kurang kenceng / kurang lurus.")
 
 createSection(mainPage, "Karakter")
 createToggle(mainPage, "Speed Karakter", "walkOn", walkStep)
