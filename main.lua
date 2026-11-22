@@ -38,7 +38,7 @@ local config = {
     fastVault = false,
     vaultSpeed = 2.0,
     walkOn = false,
-    walkMult = 1.2,
+    walkSpeed = 17,
     nofog = false,
     distance = 150,
 }
@@ -514,44 +514,60 @@ table.insert(connections, RunService.Heartbeat:Connect(function()
 end))
 
 ----------------------------------------------------------------
--- Speed Karakter (pengali dari WalkSpeed bawaan game, lokal)
+-- Speed Karakter (angka tetap, aktif pas sprint, lokal)
 ----------------------------------------------------------------
--- Pakai pengali (bukan angka tetap) supaya perubahan speed dari game
--- (sprint, injured, slowed, vault = 0) tetap jalan dan cuma dikali.
-local walk = {hum = nil, base = nil, ours = nil, conn = nil}
+-- Dari log: game pakai WalkSpeed 10 (jalan) dan 17 (sprint). Angka di menu
+-- dipakai cuma saat Sprinting = true; selain itu (jalan, vault, knocked,
+-- hooked, carried) speed tetap diatur game.
+local walk = {hum = nil, base = nil, ours = nil, conns = {}}
+local WALK_BLOCK_ATTRS = {"isvaulting", "Knocked", "IsHooked", "IsCarried"}
 
 local function applyWalk()
     local hum = walk.hum
     if not (hum and hum.Parent) then return end
-    if hum.Parent:GetAttribute("isvaulting") then return end
-    if config.walkOn then
-        if walk.base and walk.base > 0 then
-            walk.ours = walk.base * config.walkMult
-            hum.WalkSpeed = walk.ours
+    local char = hum.Parent
+    for _, a in ipairs(WALK_BLOCK_ATTRS) do
+        if char:GetAttribute(a) == true then
+            if walk.ours then walk.ours = nil end
+            return
         end
-    elseif walk.base then
+    end
+    local want = config.walkOn and char:GetAttribute("Sprinting") == true
+        and walk.base and walk.base > 0
+    if want then
+        walk.ours = config.walkSpeed
+        hum.WalkSpeed = walk.ours
+    elseif walk.ours then
         walk.ours = nil
-        hum.WalkSpeed = walk.base
+        if walk.base then hum.WalkSpeed = walk.base end
     end
 end
 
+local function unhookWalk()
+    for _, c in ipairs(walk.conns) do pcall(function() c:Disconnect() end) end
+    table.clear(walk.conns)
+end
+
 local function hookWalk(char)
-    if walk.conn then walk.conn:Disconnect() walk.conn = nil end
+    unhookWalk()
     local hum = char:WaitForChild("Humanoid", 10)
     if not hum then return end
     walk.hum, walk.base, walk.ours = hum, hum.WalkSpeed, nil
-    walk.conn = hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+    table.insert(walk.conns, hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
         if walk.ours and math.abs(hum.WalkSpeed - walk.ours) < 1e-4 then return end
         walk.base = hum.WalkSpeed -- nilai baru dari game
         applyWalk()
-    end)
+    end))
+    for _, a in ipairs({"Sprinting", table.unpack(WALK_BLOCK_ATTRS)}) do
+        table.insert(walk.conns, char:GetAttributeChangedSignal(a):Connect(applyWalk))
+    end
     applyWalk()
 end
 
 local function restoreWalk()
     config.walkOn = false
     applyWalk()
-    if walk.conn then walk.conn:Disconnect() walk.conn = nil end
+    unhookWalk()
 end
 
 table.insert(connections, LocalPlayer.CharacterAdded:Connect(function(c) task.spawn(hookWalk, c) end))
@@ -846,6 +862,8 @@ local function createButton(parent, text, callback)
     return b
 end
 
+local function fmtNum(v) return string.format("%g", math.floor(v * 100 + 0.5) / 100) end
+
 -- input angka: key = field di `config`, dibatasi minV..maxV
 local function createInput(parent, text, key, minV, maxV, onChange)
     local row = make("Frame", {
@@ -872,7 +890,7 @@ local function createInput(parent, text, key, minV, maxV, onChange)
         Size = UDim2.new(0, 60, 0, 22),
         Position = UDim2.new(1, -70, 0.5, -11),
         BackgroundColor3 = Color3.fromRGB(30, 30, 30),
-        Text = string.format("%.2f", config[key]),
+        Text = fmtNum(config[key]),
         TextColor3 = Color3.new(1, 1, 1),
         Font = Enum.Font.GothamBold,
         TextSize = 12,
@@ -886,10 +904,10 @@ local function createInput(parent, text, key, minV, maxV, onChange)
         if n then
             config[key] = math.clamp(n, minV, maxV)
             saveConfig()
-            notify(text .. ": " .. string.format("%.2f", config[key]))
+            notify(text .. ": " .. fmtNum(config[key]))
             if onChange then onChange(config[key]) end
         end
-        box.Text = string.format("%.2f", config[key])
+        box.Text = fmtNum(config[key])
     end)
 end
 
@@ -916,8 +934,8 @@ end)
 createInfo(mainPage, "Mempercepat animasi vault pallet (lokal). Vault window sengaja nggak diubah. Makin tinggi makin besar risiko kena anticheat.")
 createSection(mainPage, "Karakter")
 createToggle(mainPage, "Speed Karakter", "walkOn", applyWalk)
-createInput(mainPage, "Pengali Speed (x)", "walkMult", 1, 3, applyWalk)
-createInfo(mainPage, "Ketik angka lalu Enter (1.00 - 3.00). Dikali dari speed asli game, jadi sprint/injured tetap kerja. Makin tinggi makin gampang kena anticheat, saran 1.1 - 1.3.")
+createInput(mainPage, "Speed Sprint", "walkSpeed", 10, 30, applyWalk)
+createInfo(mainPage, "Ketik angka lalu Enter (10 - 30), misal 18. Aktif cuma pas sprint; speed bawaan game sprint = 17. Jalan, vault, knocked, hooked, dan carried tetap diatur game. Makin tinggi makin gampang kena anticheat, saran 18 - 20.")
 
 -- Tab: ESP
 local espPage = createTab("ESP")
