@@ -41,6 +41,7 @@ local config = {
     vaultSpeed = 2.0,
     walkOn = false,
     walkSpeed = 17,
+    moonwalk = false,
     nofog = false,
     distance = 150,
 }
@@ -559,6 +560,65 @@ table.insert(connections, RunService.Stepped:Connect(walkStep))
 table.insert(connections, RunService.Heartbeat:Connect(walkStep))
 
 ----------------------------------------------------------------
+-- Moonwalk (karakter menghadap kamera/layar, lokal)
+----------------------------------------------------------------
+-- Toggle di menu = fitur tersedia. Tombol X = nyala/mati moonwalk-nya.
+-- Tombol WASD tetap jalan normal; karakter cuma dihadapkan ke kamera,
+-- jadi maju (W) kelihatan kayak jalan mundur.
+local MOON_KEY = Enum.KeyCode.X
+local MOON_BLOCK_ATTRS = {"isvaulting", "overridelookscript", "Knocked", "IsHooked", "IsCarried"}
+local moon = {active = false, hum = nil, autoRotate = nil}
+
+local function moonRelease()
+    local hum = moon.hum
+    if hum and hum.Parent and moon.autoRotate ~= nil then
+        hum.AutoRotate = moon.autoRotate
+    end
+    moon.hum, moon.autoRotate = nil, nil
+end
+
+local function moonStep()
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+
+    if not (config.moonwalk and moon.active and hum and root) then
+        if moon.hum then moonRelease() end
+        return
+    end
+    for _, a in ipairs(MOON_BLOCK_ATTRS) do
+        if char:GetAttribute(a) == true then return end -- biar nggak ganggu vault/knocked
+    end
+
+    if moon.hum ~= hum then
+        moonRelease()
+        moon.hum, moon.autoRotate = hum, hum.AutoRotate
+    end
+    hum.AutoRotate = false
+
+    local cam = workspace.CurrentCamera
+    if not cam then return end
+    local pos = root.Position
+    local toCam = Vector3.new(cam.CFrame.Position.X - pos.X, 0, cam.CFrame.Position.Z - pos.Z)
+    if toCam.Magnitude < 0.05 then return end
+    root.CFrame = CFrame.new(pos, pos + toCam.Unit)
+end
+
+local function setMoonFeature(state)
+    if not state then
+        moon.active = false
+        moonRelease()
+    end
+end
+
+table.insert(connections, RunService.Stepped:Connect(moonStep))
+table.insert(connections, UIS.InputBegan:Connect(function(input, processed)
+    if processed or input.KeyCode ~= MOON_KEY or not config.moonwalk then return end
+    moon.active = not moon.active
+    notify("Moonwalk " .. (moon.active and "ON" or "OFF"))
+end))
+
+----------------------------------------------------------------
 -- GUI: Window
 ----------------------------------------------------------------
 local main = make("Frame", {
@@ -921,6 +981,8 @@ createSection(mainPage, "Karakter")
 createToggle(mainPage, "Speed Karakter", "walkOn", applyWalk)
 createInput(mainPage, "Speed Sprint", "walkSpeed", 10, 30, applyWalk)
 createInfo(mainPage, "Ketik angka lalu Enter (10 - 30), misal 18. Aktif cuma pas sprint; speed bawaan game sprint = 17. Jalan, vault, knocked, hooked, dan carried tetap diatur game. Makin tinggi makin gampang kena anticheat, saran 18 - 20.")
+createToggle(mainPage, "Moonwalk (tekan X)", "moonwalk", setMoonFeature)
+createInfo(mainPage, "Nyalakan toggle dulu, lalu tekan X di game buat on/off moonwalk. Karakter dihadapkan ke kamera; WASD tetap normal. Nggak aktif pas vault/knocked/hooked/carried.")
 
 -- Tab: ESP
 local espPage = createTab("ESP")
@@ -986,6 +1048,8 @@ local function unload()
     restoreKeys(FB_KEYS)
     restoreFog()
     restoreWalk()
+    moon.active = false
+    moonRelease()
     for _, conns in pairs(playerConns) do
         for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
     end
