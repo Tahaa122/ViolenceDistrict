@@ -37,6 +37,8 @@ local config = {
     fullbright = false,
     fastVault = false,
     vaultSpeed = 2.0,
+    walkOn = false,
+    walkMult = 1.2,
     nofog = false,
     distance = 150,
 }
@@ -477,11 +479,13 @@ table.insert(connections, RunService.Heartbeat:Connect(function(dt)
 end))
 
 ----------------------------------------------------------------
--- Fast Vault (percepat animasi vault window & pallet, lokal)
+-- Fast Vault (percepat animasi vault pallet, lokal)
 ----------------------------------------------------------------
 -- dari log: animasi vault window = "WalkingVaultAnimation"; game sendiri pakai speed 1.0 (slow) / 1.7 (medium)
 -- kecepatan diatur di tab Main (config.vaultSpeed)
 local VAULT_KEYWORDS = {"vault", "pallet"}
+-- vault window (WalkingVaultAnimation) dikecualikan: jalurnya lewat NetMotion/anticheat game dan error kalau animasinya diubah
+local VAULT_EXCLUDE = {"walkingvault"}
 local seenTracks = {}
 
 table.insert(connections, RunService.Heartbeat:Connect(function()
@@ -496,14 +500,62 @@ table.insert(connections, RunService.Heartbeat:Connect(function()
             seenTracks[name] = true
             print("[VD] animasi terdeteksi:", track.Name) -- cek di F9 buat nyari nama animasi pallet
         end
+        local excluded = false
+        for _, ex in ipairs(VAULT_EXCLUDE) do
+            if string.find(name, ex, 1, true) then excluded = true break end
+        end
         for _, kw in ipairs(VAULT_KEYWORDS) do
-            if string.find(name, kw, 1, true) then
+            if not excluded and string.find(name, kw, 1, true) then
                 if track.Speed ~= config.vaultSpeed then track:AdjustSpeed(config.vaultSpeed) end
                 break
             end
         end
     end
 end))
+
+----------------------------------------------------------------
+-- Speed Karakter (pengali dari WalkSpeed bawaan game, lokal)
+----------------------------------------------------------------
+-- Pakai pengali (bukan angka tetap) supaya perubahan speed dari game
+-- (sprint, injured, slowed, vault = 0) tetap jalan dan cuma dikali.
+local walk = {hum = nil, base = nil, ours = nil, conn = nil}
+
+local function applyWalk()
+    local hum = walk.hum
+    if not (hum and hum.Parent) then return end
+    if hum.Parent:GetAttribute("isvaulting") then return end
+    if config.walkOn then
+        if walk.base and walk.base > 0 then
+            walk.ours = walk.base * config.walkMult
+            hum.WalkSpeed = walk.ours
+        end
+    elseif walk.base then
+        walk.ours = nil
+        hum.WalkSpeed = walk.base
+    end
+end
+
+local function hookWalk(char)
+    if walk.conn then walk.conn:Disconnect() walk.conn = nil end
+    local hum = char:WaitForChild("Humanoid", 10)
+    if not hum then return end
+    walk.hum, walk.base, walk.ours = hum, hum.WalkSpeed, nil
+    walk.conn = hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+        if walk.ours and math.abs(hum.WalkSpeed - walk.ours) < 1e-4 then return end
+        walk.base = hum.WalkSpeed -- nilai baru dari game
+        applyWalk()
+    end)
+    applyWalk()
+end
+
+local function restoreWalk()
+    config.walkOn = false
+    applyWalk()
+    if walk.conn then walk.conn:Disconnect() walk.conn = nil end
+end
+
+table.insert(connections, LocalPlayer.CharacterAdded:Connect(function(c) task.spawn(hookWalk, c) end))
+if LocalPlayer.Character then task.spawn(hookWalk, LocalPlayer.Character) end
 
 ----------------------------------------------------------------
 -- GUI: Window
@@ -794,13 +846,60 @@ local function createButton(parent, text, callback)
     return b
 end
 
+-- input angka: key = field di `config`, dibatasi minV..maxV
+local function createInput(parent, text, key, minV, maxV, onChange)
+    local row = make("Frame", {
+        Size = UDim2.new(1, 0, 0, 32),
+        BackgroundColor3 = Color3.fromRGB(20, 20, 20),
+        BorderSizePixel = 0,
+        LayoutOrder = nextOrder(parent),
+    }, parent)
+    corner(row, 8)
+    stroke(row, 0.85)
+
+    make("TextLabel", {
+        Size = UDim2.new(1, -90, 1, 0),
+        Position = UDim2.new(0, 12, 0, 0),
+        BackgroundTransparency = 1,
+        Text = text,
+        TextColor3 = Color3.new(1, 1, 1),
+        Font = Enum.Font.GothamMedium,
+        TextSize = 13,
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, row)
+
+    local box = make("TextBox", {
+        Size = UDim2.new(0, 60, 0, 22),
+        Position = UDim2.new(1, -70, 0.5, -11),
+        BackgroundColor3 = Color3.fromRGB(30, 30, 30),
+        Text = string.format("%.2f", config[key]),
+        TextColor3 = Color3.new(1, 1, 1),
+        Font = Enum.Font.GothamBold,
+        TextSize = 12,
+        ClearTextOnFocus = false,
+    }, row)
+    corner(box, 6)
+    stroke(box, 0.5)
+
+    box.FocusLost:Connect(function()
+        local n = tonumber(box.Text)
+        if n then
+            config[key] = math.clamp(n, minV, maxV)
+            saveConfig()
+            notify(text .. ": " .. string.format("%.2f", config[key]))
+            if onChange then onChange(config[key]) end
+        end
+        box.Text = string.format("%.2f", config[key])
+    end)
+end
+
 ----------------------------------------------------------------
 -- GUI: Isi Tab
 ----------------------------------------------------------------
 -- Tab: Main
 local mainPage = createTab("Main")
 createSection(mainPage, "Gerakan")
-createToggle(mainPage, "Fast Vault (Window & Pallet)", "fastVault")
+createToggle(mainPage, "Fast Vault (Pallet)", "fastVault")
 
 local function vaultSpeedText()
     return "Speed Vault: " .. string.format("%.1f", config.vaultSpeed) .. "x"
@@ -814,7 +913,11 @@ createButton(mainPage, vaultSpeedText(), function(btn)
     saveConfig()
     notify(vaultSpeedText())
 end)
-createInfo(mainPage, "Mempercepat animasi vault (lokal). Game sendiri pakai 1.0x (jalan) dan 1.7x (lari). Makin tinggi makin besar risiko kena anticheat.\nKalau pallet nggak ngaruh, cek nama animasinya di F9 console ([VD] animasi terdeteksi).")
+createInfo(mainPage, "Mempercepat animasi vault pallet (lokal). Vault window sengaja nggak diubah. Makin tinggi makin besar risiko kena anticheat.")
+createSection(mainPage, "Karakter")
+createToggle(mainPage, "Speed Karakter", "walkOn", applyWalk)
+createInput(mainPage, "Pengali Speed (x)", "walkMult", 1, 3, applyWalk)
+createInfo(mainPage, "Ketik angka lalu Enter (1.00 - 3.00). Dikali dari speed asli game, jadi sprint/injured tetap kerja. Makin tinggi makin gampang kena anticheat, saran 1.1 - 1.3.")
 
 -- Tab: ESP
 local espPage = createTab("ESP")
@@ -879,6 +982,7 @@ local function unload()
     for inst in pairs(objESP) do removeObj(inst) end
     restoreKeys(FB_KEYS)
     restoreFog()
+    restoreWalk()
     for _, conns in pairs(playerConns) do
         for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
     end
