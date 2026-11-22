@@ -1,36 +1,141 @@
--- Violence District | Tabbed Menu by jeysar
--- Tab: ESP (Aura / Name / Pallet / Window / Generator), Misc
+-- Violence District | Menu v1.1 by jeysar
+-- Tab: ESP, Visual, Settings
+
+local VERSION = "v1.1"
 
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local Lighting = game:GetService("Lighting")
+local HttpService = game:GetService("HttpService")
 
 if not game:IsLoaded() then game.Loaded:Wait() end
 
 local LocalPlayer = Players.LocalPlayer
-local connections = {}
-local espData = {}
-local auraOn, nameOn = false, false
-local minimized = false
 
+----------------------------------------------------------------
+-- Konstanta & Config
+----------------------------------------------------------------
 local COLOR_SURVIVOR = Color3.fromRGB(255, 255, 255)
 local COLOR_KILLER = Color3.fromRGB(255, 50, 50)
 local COLOR_PALLET = Color3.fromRGB(255, 200, 0)
-local COLOR_WINDOW = Color3.fromRGB(0, 170, 255)
 local COLOR_GENERATOR = Color3.fromRGB(80, 255, 120)
 local TOGGLE_KEY = Enum.KeyCode.RightShift
-local FULL_SIZE = UDim2.new(0, 400, 0, 250)
-local MINI_SIZE = UDim2.new(0, 400, 0, 34)
+local FULL_SIZE = UDim2.new(0, 440, 0, 290)
+local MINI_SIZE = UDim2.new(0, 440, 0, 34)
+local DISTANCE_PRESETS = {100, 150, 250, 0} -- 0 = tanpa batas
+local CONFIG_FILE = "ViolenceDistrict_config.json"
+
+local config = {
+    aura = false,
+    name = false,
+    pallet = false,
+    generator = false,
+    genProgress = true,
+    fullbright = false,
+    nofog = false,
+    distance = 150,
+}
+
+local function loadConfig()
+    if not (isfile and readfile) then return end
+    local ok, data = pcall(function()
+        if not isfile(CONFIG_FILE) then return nil end
+        return HttpService:JSONDecode(readfile(CONFIG_FILE))
+    end)
+    if ok and type(data) == "table" then
+        for k, v in pairs(data) do
+            if config[k] ~= nil and type(v) == type(config[k]) then
+                config[k] = v
+            end
+        end
+    end
+end
+
+local function saveConfig()
+    if not writefile then return false end
+    local ok = pcall(function()
+        writefile(CONFIG_FILE, HttpService:JSONEncode(config))
+    end)
+    return ok
+end
+
+loadConfig()
+
+----------------------------------------------------------------
+-- State & helper umum
+----------------------------------------------------------------
+local connections = {}
+local espData = {}
+local objESP = {}
+local playerConns = {}
+local minimized = false
+
+local function make(class, props, parent)
+    local inst = Instance.new(class)
+    for k, v in pairs(props) do inst[k] = v end
+    if parent then inst.Parent = parent end
+    return inst
+end
+
+local function corner(inst, radius)
+    return make("UICorner", {CornerRadius = UDim.new(0, radius or 8)}, inst)
+end
+
+local function stroke(inst, transparency, color)
+    return make("UIStroke", {
+        Color = color or Color3.new(1, 1, 1),
+        Transparency = transparency or 0.85,
+    }, inst)
+end
+
+local orderCounter = setmetatable({}, {__mode = "k"})
+local function nextOrder(parent)
+    orderCounter[parent] = (orderCounter[parent] or 0) + 1
+    return orderCounter[parent]
+end
 
 local parentGui = (gethui and gethui()) or game:GetService("CoreGui")
 if parentGui:FindFirstChild("ViolenceDistrict") then
     parentGui.ViolenceDistrict:Destroy()
 end
 
+local gui = make("ScreenGui", {Name = "ViolenceDistrict", ResetOnSpawn = false}, parentGui)
+
+-- Toast notifikasi kecil
+local toast = make("TextLabel", {
+    Size = UDim2.new(0, 190, 0, 26),
+    Position = UDim2.new(0.5, -95, 1, -60),
+    BackgroundColor3 = Color3.fromRGB(20, 20, 20),
+    BackgroundTransparency = 1,
+    TextColor3 = Color3.new(1, 1, 1),
+    TextTransparency = 1,
+    Font = Enum.Font.GothamMedium,
+    TextSize = 12,
+    Text = "",
+    ZIndex = 10,
+}, gui)
+corner(toast, 8)
+
+local toastSeq = 0
+local function notify(text)
+    toastSeq += 1
+    local id = toastSeq
+    toast.Text = text
+    toast.BackgroundTransparency = 0.1
+    toast.TextTransparency = 0
+    task.delay(1.6, function()
+        if id ~= toastSeq or not toast.Parent then return end
+        TweenService:Create(toast, TweenInfo.new(0.3), {
+            BackgroundTransparency = 1,
+            TextTransparency = 1,
+        }):Play()
+    end)
+end
+
 ----------------------------------------------------------------
--- ESP Player
+-- ESP Player (aura + nama + jarak)
 ----------------------------------------------------------------
 local function isKiller(plr)
     if plr.Team and string.find(string.lower(plr.Team.Name), "killer") then
@@ -54,47 +159,44 @@ end
 
 local function applyESP(plr)
     removeESP(plr)
-    if plr == LocalPlayer or not (auraOn or nameOn) then return end
+    if plr == LocalPlayer or not (config.aura or config.name) then return end
     local char = plr.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
 
-    local killer = isKiller(plr)
-    local color = killer and COLOR_KILLER or COLOR_SURVIVOR
-    local data = {killer = killer}
+    local color = isKiller(plr) and COLOR_KILLER or COLOR_SURVIVOR
+    local data = {hrp = hrp}
 
-    if auraOn then
-        local hl = Instance.new("Highlight")
-        hl.Name = "VD_Aura"
-        hl.FillColor = color
-        hl.FillTransparency = 0.75
-        hl.OutlineColor = color
-        hl.OutlineTransparency = 0
-        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-        hl.Adornee = char
-        hl.Parent = char
-        data.highlight = hl
+    if config.aura then
+        data.highlight = make("Highlight", {
+            Name = "VD_Aura",
+            FillColor = color,
+            FillTransparency = 0.75,
+            OutlineColor = color,
+            OutlineTransparency = 0,
+            DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,
+            Adornee = char,
+        }, char)
     end
 
-    if nameOn then
-        local bb = Instance.new("BillboardGui")
-        bb.Name = "VD_Name"
-        bb.Size = UDim2.new(0, 120, 0, 20)
-        bb.StudsOffset = Vector3.new(0, 3.2, 0)
-        bb.AlwaysOnTop = true
-        bb.Adornee = hrp
-        bb.Parent = char
-
-        local lbl = Instance.new("TextLabel")
-        lbl.Size = UDim2.new(1, 0, 1, 0)
-        lbl.BackgroundTransparency = 1
-        lbl.Text = plr.DisplayName
-        lbl.TextColor3 = color
-        lbl.TextStrokeColor3 = Color3.new(0, 0, 0)
-        lbl.TextStrokeTransparency = 0
-        lbl.Font = Enum.Font.GothamBold
-        lbl.TextSize = 13
-        lbl.Parent = bb
+    if config.name then
+        local bb = make("BillboardGui", {
+            Name = "VD_Name",
+            Size = UDim2.new(0, 140, 0, 20),
+            StudsOffset = Vector3.new(0, 3.2, 0),
+            AlwaysOnTop = true,
+            Adornee = hrp,
+        }, char)
+        data.label = make("TextLabel", {
+            Size = UDim2.new(1, 0, 1, 0),
+            BackgroundTransparency = 1,
+            Text = plr.DisplayName,
+            TextColor3 = color,
+            TextStrokeColor3 = Color3.new(0, 0, 0),
+            TextStrokeTransparency = 0,
+            Font = Enum.Font.GothamBold,
+            TextSize = 13,
+        }, bb)
         data.billboard = bb
     end
 
@@ -107,80 +209,87 @@ end
 
 local function setupPlayer(plr)
     if plr == LocalPlayer then return end
-    table.insert(connections, plr.CharacterAdded:Connect(function()
-        task.wait(0.5)
+    local conns = {}
+    playerConns[plr] = conns
+    local function refresh() applyESP(plr) end
+
+    local function onCharacter(char)
+        char:WaitForChild("HumanoidRootPart", 10)
+        if not char.Parent then return end
         applyESP(plr)
+        table.insert(conns, char:GetAttributeChangedSignal("Role"):Connect(refresh))
+    end
+
+    table.insert(conns, plr.CharacterAdded:Connect(function(char)
+        task.spawn(onCharacter, char)
     end))
-    table.insert(connections, plr.CharacterRemoving:Connect(function()
-        removeESP(plr)
-    end))
-    applyESP(plr)
+    table.insert(conns, plr.CharacterRemoving:Connect(function() removeESP(plr) end))
+    table.insert(conns, plr:GetPropertyChangedSignal("Team"):Connect(refresh))
+    table.insert(conns, plr:GetAttributeChangedSignal("Role"):Connect(refresh))
+
+    if plr.Character then task.spawn(onCharacter, plr.Character) end
+end
+
+local function cleanupPlayer(plr)
+    removeESP(plr)
+    local conns = playerConns[plr]
+    if conns then
+        for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
+        playerConns[plr] = nil
+    end
 end
 
 for _, p in ipairs(Players:GetPlayers()) do setupPlayer(p) end
 table.insert(connections, Players.PlayerAdded:Connect(setupPlayer))
-table.insert(connections, Players.PlayerRemoving:Connect(removeESP))
+table.insert(connections, Players.PlayerRemoving:Connect(cleanupPlayer))
 
 ----------------------------------------------------------------
--- Misc: Fullbright
+-- ESP Objek (Pallet & Generator)
 ----------------------------------------------------------------
-local fbOn = false
-local fbOriginal = {
-    Brightness = Lighting.Brightness,
-    ClockTime = Lighting.ClockTime,
-    Ambient = Lighting.Ambient,
-    OutdoorAmbient = Lighting.OutdoorAmbient,
-    GlobalShadows = Lighting.GlobalShadows,
-}
-
-local function setFullbright(state)
-    fbOn = state
-    if not state then
-        for k, v in pairs(fbOriginal) do Lighting[k] = v end
+local function progressColor(progress)
+    local t = math.clamp((progress or 0) / 100, 0, 1)
+    local red = Color3.fromRGB(255, 60, 60)
+    local yellow = Color3.fromRGB(255, 220, 60)
+    local green = Color3.fromRGB(80, 255, 120)
+    if t < 0.5 then
+        return red:Lerp(yellow, t * 2)
     end
+    return yellow:Lerp(green, (t - 0.5) * 2)
 end
 
-table.insert(connections, RunService.RenderStepped:Connect(function()
-    if fbOn then
-        Lighting.Brightness = 2
-        Lighting.ClockTime = 14
-        Lighting.Ambient = Color3.fromRGB(200, 200, 200)
-        Lighting.OutdoorAmbient = Color3.fromRGB(200, 200, 200)
-        Lighting.GlobalShadows = false
-    end
-end))
-
-----------------------------------------------------------------
--- GUI
-----------------------------------------------------------------
-local gui = Instance.new("ScreenGui")
-gui.Name = "ViolenceDistrict"
-gui.ResetOnSpawn = false
-gui.Parent = parentGui
-
-----------------------------------------------------------------
--- ESP Object: Pallet & Window
--- (harus di bawah pembuatan `gui` karena label ditaruh di sana)
-----------------------------------------------------------------
-local palletOn, windowOn, genOn = false, false, false
-local objESP = {}
-local OBJ_COLORS = {pallet = COLOR_PALLET, window = COLOR_WINDOW, generator = COLOR_GENERATOR}
-
 local function getKind(inst)
-    if not (inst:IsA("Model") or inst:IsA("BasePart")) then return nil end
-    local n = string.lower(inst.Name)
-    if string.find(n, "pallet") then return "pallet" end
-    if string.find(n, "window") then return "window" end
-    if string.find(n, "generator") then return "generator" end
+    if inst:IsA("Model") then
+        if inst:GetAttribute("RepairProgress") ~= nil or inst.Name == "Generator" then
+            return "generator"
+        end
+    end
+    if (inst:IsA("Model") or inst:IsA("BasePart")) and string.find(string.lower(inst.Name), "pallet") then
+        return "pallet"
+    end
     return nil
 end
 
 local function removeObj(inst)
     local d = objESP[inst]
     if d then
-        if d.conn then d.conn:Disconnect() end
-        if d.highlight then d.highlight:Destroy() end
+        for _, c in ipairs(d.conns) do pcall(function() c:Disconnect() end) end
+        if d.hl then d.hl:Destroy() end
         objESP[inst] = nil
+    end
+end
+
+local function refreshGen(inst, d)
+    local progress = inst:GetAttribute("RepairProgress") or 0
+    d.done = inst:GetAttribute("Completed") == true or progress >= 100
+    local color = config.genProgress and progressColor(progress) or COLOR_GENERATOR
+    d.hl.FillColor = color
+    d.hl.OutlineColor = color
+    if d.done then d.hl.Enabled = false end
+end
+
+local function refreshGenColors()
+    for inst, d in pairs(objESP) do
+        if d.kind == "generator" then refreshGen(inst, d) end
     end
 end
 
@@ -188,64 +297,141 @@ local function applyObj(inst)
     if objESP[inst] then return end
     local kind = getKind(inst)
     if not kind then return end
-    if (kind == "pallet" and not palletOn) or (kind == "window" and not windowOn) or (kind == "generator" and not genOn) then return end
+    if (kind == "pallet" and not config.pallet) or (kind == "generator" and not config.generator) then
+        return
+    end
 
-    -- skip kalau induknya udah ke-track (biar nggak dobel)
+    -- skip kalau induknya sudah ke-track (biar nggak dobel)
     local p = inst.Parent
     while p and p ~= workspace do
         if objESP[p] then return end
         p = p.Parent
     end
 
-    local color = OBJ_COLORS[kind]
+    local color = kind == "pallet" and COLOR_PALLET or COLOR_GENERATOR
+    local hl = make("Highlight", {
+        Name = "VD_Obj",
+        FillColor = color,
+        FillTransparency = 0.6,
+        OutlineColor = color,
+        OutlineTransparency = 0,
+        DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,
+        Adornee = inst,
+    }, gui) -- ditaruh di gui biar map nggak ke-modif
 
-    local hl = Instance.new("Highlight")
-    hl.Name = "VD_Obj"
-    hl.FillColor = color
-    hl.FillTransparency = 0.6
-    hl.OutlineColor = color
-    hl.OutlineTransparency = 0
-    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-    hl.Adornee = inst
-    hl.Parent = gui -- taruh di gui lu biar map nggak ke-modif
+    local d = {hl = hl, kind = kind, conns = {}, done = false}
+    objESP[inst] = d
 
-    local conn = inst.AncestryChanged:Connect(function()
+    table.insert(d.conns, inst.AncestryChanged:Connect(function()
         if not inst:IsDescendantOf(workspace) then removeObj(inst) end
-    end)
+    end))
 
-    objESP[inst] = {highlight = hl, conn = conn}
+    if kind == "generator" then
+        table.insert(d.conns, inst:GetAttributeChangedSignal("RepairProgress"):Connect(function()
+            refreshGen(inst, d)
+        end))
+        table.insert(d.conns, inst:GetAttributeChangedSignal("Completed"):Connect(function()
+            refreshGen(inst, d)
+        end))
+        refreshGen(inst, d)
+    end
 end
 
 local function refreshObjs()
     for inst in pairs(objESP) do removeObj(inst) end
-    if not (palletOn or windowOn or genOn) then return end
+    if not (config.pallet or config.generator) then return end
     for _, d in ipairs(workspace:GetDescendants()) do applyObj(d) end
 end
 
 table.insert(connections, workspace.DescendantAdded:Connect(function(d)
-    if palletOn or windowOn or genOn then
+    if config.pallet or config.generator then
         task.defer(applyObj, d)
     end
 end))
 
 ----------------------------------------------------------------
--- Main window
+-- Visual: Fullbright & No Fog
 ----------------------------------------------------------------
-local main = Instance.new("Frame")
-main.Name = "Main"
-main.Size = FULL_SIZE
-main.Position = UDim2.new(0.5, -200, 0.5, -125)
-main.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
-main.BorderSizePixel = 0
-main.ClipsDescendants = true
-main.Parent = gui
-Instance.new("UICorner", main).CornerRadius = UDim.new(0, 10)
+local FB_KEYS = {"Brightness", "ClockTime", "Ambient", "OutdoorAmbient", "GlobalShadows"}
+local FOG_KEYS = {"FogEnd", "FogStart"}
+local lightOriginal = {}
+for _, k in ipairs(FB_KEYS) do lightOriginal[k] = Lighting[k] end
+for _, k in ipairs(FOG_KEYS) do lightOriginal[k] = Lighting[k] end
+local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere")
+local atmosphereDensity = atmosphere and atmosphere.Density
 
-local glow = Instance.new("UIStroke")
-glow.Color = Color3.new(1, 1, 1)
-glow.Thickness = 1.5
-glow.Transparency = 0.2
-glow.Parent = main
+local function restoreKeys(keys)
+    for _, k in ipairs(keys) do Lighting[k] = lightOriginal[k] end
+end
+
+local function restoreFog()
+    restoreKeys(FOG_KEYS)
+    if atmosphere and atmosphereDensity then atmosphere.Density = atmosphereDensity end
+end
+
+table.insert(connections, RunService.RenderStepped:Connect(function()
+    if config.fullbright then
+        Lighting.Brightness = 2
+        Lighting.ClockTime = 14
+        Lighting.Ambient = Color3.fromRGB(200, 200, 200)
+        Lighting.OutdoorAmbient = Color3.fromRGB(200, 200, 200)
+        Lighting.GlobalShadows = false
+    end
+    if config.nofog then
+        Lighting.FogStart = 1e5
+        Lighting.FogEnd = 1e6
+        if atmosphere then atmosphere.Density = 0 end
+    end
+end))
+
+----------------------------------------------------------------
+-- Update berkala (jarak player + batas jarak objek)
+----------------------------------------------------------------
+local acc = 0
+table.insert(connections, RunService.Heartbeat:Connect(function(dt)
+    acc += dt
+    if acc < 0.25 then return end
+    acc = 0
+
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local rootPos = root and root.Position
+
+    for plr, d in pairs(espData) do
+        if d.label and d.hrp and d.hrp.Parent and rootPos then
+            local dist = math.floor((d.hrp.Position - rootPos).Magnitude)
+            d.label.Text = plr.DisplayName .. " [" .. dist .. "m]"
+        end
+    end
+
+    local maxD = config.distance
+    for inst, d in pairs(objESP) do
+        local visible = not d.done
+        if visible and maxD > 0 and rootPos then
+            visible = (inst:GetPivot().Position - rootPos).Magnitude <= maxD
+        end
+        d.hl.Enabled = visible
+    end
+end))
+
+----------------------------------------------------------------
+-- GUI: Window
+----------------------------------------------------------------
+local main = make("Frame", {
+    Name = "Main",
+    Size = FULL_SIZE,
+    Position = UDim2.new(0.5, -220, 0.5, -145),
+    BackgroundColor3 = Color3.fromRGB(10, 10, 10),
+    BorderSizePixel = 0,
+    ClipsDescendants = true,
+}, gui)
+corner(main, 10)
+
+local glow = make("UIStroke", {
+    Color = Color3.new(1, 1, 1),
+    Thickness = 1.5,
+    Transparency = 0.2,
+}, main)
 
 task.spawn(function()
     while gui.Parent do
@@ -257,70 +443,71 @@ task.spawn(function()
     end
 end)
 
--- Refresh warna kalau role berubah
-task.spawn(function()
-    while gui.Parent do
-        task.wait(1)
-        if auraOn or nameOn then
-            for plr, d in pairs(espData) do
-                if d.killer ~= isKiller(plr) then applyESP(plr) end
-            end
-        end
-    end
-end)
-
 -- Title bar
-local top = Instance.new("Frame")
-top.Size = UDim2.new(1, 0, 0, 34)
-top.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-top.BorderSizePixel = 0
-top.Parent = main
+local top = make("Frame", {
+    Size = UDim2.new(1, 0, 0, 34),
+    BackgroundColor3 = Color3.fromRGB(20, 20, 20),
+    BorderSizePixel = 0,
+}, main)
 
-local titleHolder = Instance.new("Frame")
-titleHolder.Size = UDim2.new(1, -80, 1, 0)
-titleHolder.Position = UDim2.new(0, 12, 0, 0)
-titleHolder.BackgroundTransparency = 1
-titleHolder.Parent = top
+local titleHolder = make("Frame", {
+    Size = UDim2.new(1, -80, 1, 0),
+    Position = UDim2.new(0, 12, 0, 0),
+    BackgroundTransparency = 1,
+}, top)
 
-local tl = Instance.new("UIListLayout", titleHolder)
-tl.FillDirection = Enum.FillDirection.Horizontal
-tl.VerticalAlignment = Enum.VerticalAlignment.Center
-tl.Padding = UDim.new(0, 6)
+make("UIListLayout", {
+    FillDirection = Enum.FillDirection.Horizontal,
+    VerticalAlignment = Enum.VerticalAlignment.Center,
+    SortOrder = Enum.SortOrder.LayoutOrder,
+    Padding = UDim.new(0, 6),
+}, titleHolder)
 
-local title = Instance.new("TextLabel")
-title.AutomaticSize = Enum.AutomaticSize.X
-title.Size = UDim2.new(0, 0, 1, 0)
-title.BackgroundTransparency = 1
-title.Text = "VIOLENCE DISTRICT"
-title.TextColor3 = Color3.new(1, 1, 1)
-title.Font = Enum.Font.GothamBlack
-title.TextSize = 13
-title.Parent = titleHolder
+make("TextLabel", {
+    AutomaticSize = Enum.AutomaticSize.X,
+    Size = UDim2.new(0, 0, 1, 0),
+    BackgroundTransparency = 1,
+    Text = "VIOLENCE DISTRICT",
+    TextColor3 = Color3.new(1, 1, 1),
+    Font = Enum.Font.GothamBlack,
+    TextSize = 13,
+    LayoutOrder = 1,
+}, titleHolder)
 
-local wm = Instance.new("TextLabel")
-wm.AutomaticSize = Enum.AutomaticSize.X
-wm.Size = UDim2.new(0, 0, 1, 0)
-wm.BackgroundTransparency = 1
-wm.Text = "by jeysar"
-wm.TextColor3 = Color3.fromRGB(140, 140, 140)
-wm.Font = Enum.Font.Gotham
-wm.TextSize = 8
-wm.Parent = titleHolder
+make("TextLabel", {
+    AutomaticSize = Enum.AutomaticSize.X,
+    Size = UDim2.new(0, 0, 1, 0),
+    BackgroundTransparency = 1,
+    Text = VERSION,
+    TextColor3 = Color3.fromRGB(200, 200, 200),
+    Font = Enum.Font.GothamBold,
+    TextSize = 10,
+    LayoutOrder = 2,
+}, titleHolder)
+
+make("TextLabel", {
+    AutomaticSize = Enum.AutomaticSize.X,
+    Size = UDim2.new(0, 0, 1, 0),
+    BackgroundTransparency = 1,
+    Text = "by jeysar",
+    TextColor3 = Color3.fromRGB(140, 140, 140),
+    Font = Enum.Font.Gotham,
+    TextSize = 8,
+    LayoutOrder = 3,
+}, titleHolder)
 
 local function makeTopBtn(text, xOffset)
-    local b = Instance.new("TextButton")
-    b.Size = UDim2.new(0, 26, 0, 22)
-    b.Position = UDim2.new(1, xOffset, 0, 6)
-    b.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-    b.Text = text
-    b.TextColor3 = Color3.new(1, 1, 1)
-    b.Font = Enum.Font.GothamBold
-    b.TextSize = 14
-    b.Parent = top
-    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
-    local s = Instance.new("UIStroke", b)
-    s.Color = Color3.new(1, 1, 1)
-    s.Transparency = 0.6
+    local b = make("TextButton", {
+        Size = UDim2.new(0, 26, 0, 22),
+        Position = UDim2.new(1, xOffset, 0, 6),
+        BackgroundColor3 = Color3.fromRGB(35, 35, 35),
+        Text = text,
+        TextColor3 = Color3.new(1, 1, 1),
+        Font = Enum.Font.GothamBold,
+        TextSize = 14,
+    }, top)
+    corner(b, 6)
+    stroke(b, 0.6)
     return b
 end
 
@@ -328,51 +515,52 @@ local minBtn = makeTopBtn("–", -62)
 local closeBtn = makeTopBtn("X", -32)
 
 -- Body
-local body = Instance.new("Frame")
-body.Size = UDim2.new(1, 0, 1, -34)
-body.Position = UDim2.new(0, 0, 0, 34)
-body.BackgroundTransparency = 1
-body.Parent = main
+local body = make("Frame", {
+    Size = UDim2.new(1, 0, 1, -34),
+    Position = UDim2.new(0, 0, 0, 34),
+    BackgroundTransparency = 1,
+}, main)
 
--- Sidebar
-local sidebar = Instance.new("Frame")
-sidebar.Size = UDim2.new(0, 100, 1, 0)
-sidebar.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
-sidebar.BorderSizePixel = 0
-sidebar.Parent = body
+local sidebar = make("Frame", {
+    Size = UDim2.new(0, 110, 1, 0),
+    BackgroundColor3 = Color3.fromRGB(15, 15, 15),
+    BorderSizePixel = 0,
+}, body)
+make("UIListLayout", {Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder}, sidebar)
+make("UIPadding", {
+    PaddingTop = UDim.new(0, 10),
+    PaddingLeft = UDim.new(0, 8),
+    PaddingRight = UDim.new(0, 8),
+}, sidebar)
 
-local sl = Instance.new("UIListLayout", sidebar)
-sl.Padding = UDim.new(0, 6)
-local sp = Instance.new("UIPadding", sidebar)
-sp.PaddingTop = UDim.new(0, 10)
-sp.PaddingLeft = UDim.new(0, 8)
-sp.PaddingRight = UDim.new(0, 8)
+local pages = make("Frame", {
+    Size = UDim2.new(1, -110, 1, 0),
+    Position = UDim2.new(0, 110, 0, 0),
+    BackgroundTransparency = 1,
+}, body)
 
-local pages = Instance.new("Frame")
-pages.Size = UDim2.new(1, -100, 1, 0)
-pages.Position = UDim2.new(0, 100, 0, 0)
-pages.BackgroundTransparency = 1
-pages.Parent = body
-
+----------------------------------------------------------------
+-- GUI: Komponen
+----------------------------------------------------------------
 local tabs = {}
 
 local function createPage()
-    local p = Instance.new("ScrollingFrame")
-    p.Size = UDim2.new(1, 0, 1, 0)
-    p.BackgroundTransparency = 1
-    p.BorderSizePixel = 0
-    p.ScrollBarThickness = 3
-    p.AutomaticCanvasSize = Enum.AutomaticSize.Y
-    p.CanvasSize = UDim2.new(0, 0, 0, 0)
-    p.Visible = false
-    p.Parent = pages
-    local l = Instance.new("UIListLayout", p)
-    l.Padding = UDim.new(0, 8)
-    local pad = Instance.new("UIPadding", p)
-    pad.PaddingTop = UDim.new(0, 12)
-    pad.PaddingLeft = UDim.new(0, 12)
-    pad.PaddingRight = UDim.new(0, 12)
-    pad.PaddingBottom = UDim.new(0, 12)
+    local p = make("ScrollingFrame", {
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ScrollBarThickness = 3,
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        Visible = false,
+    }, pages)
+    make("UIListLayout", {Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder}, p)
+    make("UIPadding", {
+        PaddingTop = UDim.new(0, 12),
+        PaddingLeft = UDim.new(0, 12),
+        PaddingRight = UDim.new(0, 12),
+        PaddingBottom = UDim.new(0, 12),
+    }, p)
     return p
 end
 
@@ -388,103 +576,179 @@ local function selectTab(name)
 end
 
 local function createTab(name)
-    local b = Instance.new("TextButton")
-    b.Size = UDim2.new(1, 0, 0, 30)
-    b.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
-    b.Text = name
-    b.TextColor3 = Color3.fromRGB(200, 200, 200)
-    b.Font = Enum.Font.GothamBold
-    b.TextSize = 12
-    b.AutoButtonColor = false
-    b.Parent = sidebar
-    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+    local b = make("TextButton", {
+        Size = UDim2.new(1, 0, 0, 30),
+        BackgroundColor3 = Color3.fromRGB(28, 28, 28),
+        Text = name,
+        TextColor3 = Color3.fromRGB(200, 200, 200),
+        Font = Enum.Font.GothamBold,
+        TextSize = 12,
+        AutoButtonColor = false,
+        LayoutOrder = nextOrder(sidebar),
+    }, sidebar)
+    corner(b, 6)
     local page = createPage()
     tabs[name] = {btn = b, page = page}
     b.MouseButton1Click:Connect(function() selectTab(name) end)
     return page
 end
 
-local function createToggle(parent, text, callback)
-    local row = Instance.new("Frame")
-    row.Size = UDim2.new(1, 0, 0, 34)
-    row.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-    row.Parent = parent
-    Instance.new("UICorner", row).CornerRadius = UDim.new(0, 8)
-    local rs = Instance.new("UIStroke", row)
-    rs.Color = Color3.new(1, 1, 1)
-    rs.Transparency = 0.85
+local function createSection(parent, text)
+    return make("TextLabel", {
+        Size = UDim2.new(1, 0, 0, 16),
+        BackgroundTransparency = 1,
+        Text = string.upper(text),
+        TextColor3 = Color3.fromRGB(110, 110, 110),
+        Font = Enum.Font.GothamBold,
+        TextSize = 10,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        LayoutOrder = nextOrder(parent),
+    }, parent)
+end
 
-    local lbl = Instance.new("TextLabel")
-    lbl.Size = UDim2.new(1, -70, 1, 0)
-    lbl.Position = UDim2.new(0, 12, 0, 0)
-    lbl.BackgroundTransparency = 1
-    lbl.Text = text
-    lbl.TextColor3 = Color3.new(1, 1, 1)
-    lbl.Font = Enum.Font.GothamMedium
-    lbl.TextSize = 13
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    lbl.Parent = row
+local function createInfo(parent, text)
+    return make("TextLabel", {
+        Size = UDim2.new(1, 0, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundTransparency = 1,
+        Text = text,
+        TextColor3 = Color3.fromRGB(140, 140, 140),
+        Font = Enum.Font.Gotham,
+        TextSize = 11,
+        TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Top,
+        LayoutOrder = nextOrder(parent),
+    }, parent)
+end
 
-    local sw = Instance.new("TextButton")
-    sw.Size = UDim2.new(0, 44, 0, 20)
-    sw.Position = UDim2.new(1, -54, 0.5, -10)
-    sw.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-    sw.Text = ""
-    sw.AutoButtonColor = false
-    sw.Parent = row
-    Instance.new("UICorner", sw).CornerRadius = UDim.new(1, 0)
-    local ss = Instance.new("UIStroke", sw)
-    ss.Color = Color3.new(1, 1, 1)
-    ss.Transparency = 0.5
+local KNOB_OFF = UDim2.new(0, 3, 0.5, -7)
+local KNOB_ON = UDim2.new(1, -17, 0.5, -7)
 
-    local knob = Instance.new("Frame")
-    knob.Size = UDim2.new(0, 14, 0, 14)
-    knob.Position = UDim2.new(0, 3, 0.5, -7)
-    knob.BackgroundColor3 = Color3.fromRGB(120, 120, 120)
-    knob.Parent = sw
-    Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+-- key = nama field di `config`; onChange(state) dipanggil setelah config diubah
+local function createToggle(parent, text, key, onChange)
+    local state = config[key] == true
 
-    local state = false
+    local row = make("Frame", {
+        Size = UDim2.new(1, 0, 0, 32),
+        BackgroundColor3 = Color3.fromRGB(20, 20, 20),
+        BorderSizePixel = 0,
+        LayoutOrder = nextOrder(parent),
+    }, parent)
+    corner(row, 8)
+    stroke(row, 0.85)
+
+    make("TextLabel", {
+        Size = UDim2.new(1, -70, 1, 0),
+        Position = UDim2.new(0, 12, 0, 0),
+        BackgroundTransparency = 1,
+        Text = text,
+        TextColor3 = Color3.new(1, 1, 1),
+        Font = Enum.Font.GothamMedium,
+        TextSize = 13,
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, row)
+
+    local sw = make("TextButton", {
+        Size = UDim2.new(0, 44, 0, 20),
+        Position = UDim2.new(1, -54, 0.5, -10),
+        BackgroundColor3 = state and Color3.fromRGB(70, 70, 70) or Color3.fromRGB(30, 30, 30),
+        Text = "",
+        AutoButtonColor = false,
+    }, row)
+    corner(sw, 10)
+    stroke(sw, 0.5)
+
+    local knob = make("Frame", {
+        Size = UDim2.new(0, 14, 0, 14),
+        Position = state and KNOB_ON or KNOB_OFF,
+        BackgroundColor3 = state and Color3.new(1, 1, 1) or Color3.fromRGB(120, 120, 120),
+        BorderSizePixel = 0,
+    }, sw)
+    corner(knob, 7)
+
     sw.MouseButton1Click:Connect(function()
         state = not state
+        config[key] = state
         TweenService:Create(knob, TweenInfo.new(0.2), {
-            Position = state and UDim2.new(1, -17, 0.5, -7) or UDim2.new(0, 3, 0.5, -7),
+            Position = state and KNOB_ON or KNOB_OFF,
             BackgroundColor3 = state and Color3.new(1, 1, 1) or Color3.fromRGB(120, 120, 120),
         }):Play()
         TweenService:Create(sw, TweenInfo.new(0.2), {
             BackgroundColor3 = state and Color3.fromRGB(70, 70, 70) or Color3.fromRGB(30, 30, 30),
         }):Play()
-        callback(state)
+        saveConfig()
+        notify(text .. (state and " ON" or " OFF"))
+        if onChange then onChange(state) end
     end)
+
+    -- terapkan state tersimpan saat load
+    if state and onChange then task.defer(onChange, true) end
 end
 
-local function createInfo(parent, text)
-    local l = Instance.new("TextLabel")
-    l.Size = UDim2.new(1, 0, 0, 30)
-    l.BackgroundTransparency = 1
-    l.Text = text
-    l.TextColor3 = Color3.fromRGB(140, 140, 140)
-    l.Font = Enum.Font.Gotham
-    l.TextSize = 11
-    l.TextWrapped = true
-    l.TextXAlignment = Enum.TextXAlignment.Left
-    l.TextYAlignment = Enum.TextYAlignment.Top
-    l.Parent = parent
+local function createButton(parent, text, callback)
+    local b = make("TextButton", {
+        Size = UDim2.new(1, 0, 0, 32),
+        BackgroundColor3 = Color3.fromRGB(28, 28, 28),
+        Text = text,
+        TextColor3 = Color3.new(1, 1, 1),
+        Font = Enum.Font.GothamMedium,
+        TextSize = 13,
+        BorderSizePixel = 0,
+        LayoutOrder = nextOrder(parent),
+    }, parent)
+    corner(b, 8)
+    stroke(b, 0.85)
+    b.MouseButton1Click:Connect(function() callback(b) end)
+    return b
 end
 
+----------------------------------------------------------------
+-- GUI: Isi Tab
+----------------------------------------------------------------
 -- Tab: ESP
 local espPage = createTab("ESP")
-createToggle(espPage, "Aura Player", function(s) auraOn = s; refreshAll() end)
-createToggle(espPage, "Nama Player", function(s) nameOn = s; refreshAll() end)
-createToggle(espPage, "Pallet", function(s) palletOn = s; refreshObjs() end)
-createToggle(espPage, "Window", function(s) windowOn = s; refreshObjs() end)
-createToggle(espPage, "Generator", function(s) genOn = s; refreshObjs() end)
-createInfo(espPage, "Putih = Survivor | Merah = Killer | Kuning = Pallet | Biru = Window | Hijau = Generator")
+createSection(espPage, "Player")
+createToggle(espPage, "Aura Player", "aura", refreshAll)
+createToggle(espPage, "Nama & Jarak", "name", refreshAll)
+createSection(espPage, "Objek")
+createToggle(espPage, "Pallet", "pallet", refreshObjs)
+createToggle(espPage, "Generator", "generator", refreshObjs)
+createToggle(espPage, "Warna Progress Gen", "genProgress", refreshGenColors)
+createInfo(espPage, "Putih = Survivor | Merah = Killer | Kuning = Pallet\nGenerator: merah (baru) > kuning > hijau (hampir selesai), hilang kalau sudah beres.")
 
--- Tab: Misc
-local miscPage = createTab("Misc")
-createToggle(miscPage, "Fullbright", setFullbright)
-createInfo(miscPage, "RightShift = show/hide panel (PC)")
+-- Tab: Visual
+local visualPage = createTab("Visual")
+createSection(visualPage, "Lingkungan")
+createToggle(visualPage, "Fullbright", "fullbright", function(s)
+    if not s then restoreKeys(FB_KEYS) end
+end)
+createToggle(visualPage, "No Fog", "nofog", function(s)
+    if not s then restoreFog() end
+end)
+
+-- Tab: Settings
+local settingsPage = createTab("Settings")
+createSection(settingsPage, "ESP Objek")
+
+local function distanceText()
+    return "Jarak Objek: " .. (config.distance == 0 and "Tanpa batas" or (config.distance .. " stud"))
+end
+
+createButton(settingsPage, distanceText(), function(btn)
+    local idx = table.find(DISTANCE_PRESETS, config.distance) or 0
+    idx = idx % #DISTANCE_PRESETS + 1
+    config.distance = DISTANCE_PRESETS[idx]
+    btn.Text = distanceText()
+    saveConfig()
+    notify(distanceText())
+end)
+
+createSection(settingsPage, "Config")
+createButton(settingsPage, "Simpan Config", function()
+    notify(saveConfig() and "Config tersimpan" or "Executor tidak support writefile")
+end)
+createInfo(settingsPage, "Toggle otomatis tersimpan.\nRightShift = show/hide panel (PC)\nBatas jarak membantu menghindari limit Highlight Roblox (~31).")
 
 selectTab("ESP")
 
@@ -500,16 +764,21 @@ minBtn.MouseButton1Click:Connect(function()
     minBtn.Text = minimized and "+" or "–"
 end)
 
-closeBtn.MouseButton1Click:Connect(function()
-    auraOn, nameOn = false, false
-    palletOn, windowOn, genOn = false, false, false
-    for p in pairs(espData) do removeESP(p) end
+local function unload()
+    for plr in pairs(espData) do removeESP(plr) end
     for inst in pairs(objESP) do removeObj(inst) end
-    setFullbright(false)
+    restoreKeys(FB_KEYS)
+    restoreFog()
+    for _, conns in pairs(playerConns) do
+        for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
+    end
+    table.clear(playerConns)
     for _, c in ipairs(connections) do pcall(function() c:Disconnect() end) end
     table.clear(connections)
     gui:Destroy()
-end)
+end
+
+closeBtn.MouseButton1Click:Connect(unload)
 
 table.insert(connections, UIS.InputBegan:Connect(function(input, processed)
     if processed then return end
