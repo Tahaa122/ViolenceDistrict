@@ -37,9 +37,8 @@ local FULL_SIZE = UDim2.new(0, 440, 0, 290)
 local MINI_SIZE = UDim2.new(0, 440, 0, 34)
 local DISTANCE_PRESETS = {100, 150, 250, 0} -- 0 = tanpa batas
 local VAULT_PRESETS = {1.5, 1.7, 2.0, 2.5, 3.0}
--- batas atas window dihitung dari log: vault "fast" bawaan game ~0.43s,
--- window normal ~0.83s -> maksimal ~2.6x biar nggak lebih cepat dari yang game sendiri izinkan
-local WINDOW_VAULT_PRESETS = {2.0, 2.3, 2.6}
+-- batas atas animasi window (vault "fast" bawaan game ~0.55s dari animasi 1.42s)
+local WINDOW_MAX_SPEED = 2.6
 local CONFIG_FILE = "ViolenceDistrict_config.json"
 
 local DEFAULTS = {
@@ -52,8 +51,7 @@ local DEFAULTS = {
     nofog = false,
     fastVault = false,
     vaultSpeed = 2.0,
-    fastVaultWindow = false,
-    windowVaultSpeed = 2.0,
+    vaultInfo = true,
     walkOn = false,
     walkSpeed = 17,
     distance = 150,
@@ -511,10 +509,10 @@ end))
 ----------------------------------------------------------------
 -- Fast Vault (percepat animasi vault pallet, lokal)
 ----------------------------------------------------------------
--- Pallet/running vault ("RunningVaultAnimation", dll) dan vault window
--- ("WalkingVaultAnimation") punya toggle & speed sendiri.
--- Window cuma dipercepat selama atribut isvaulting = true (dari log), dan
--- batas speed-nya dibuat nggak lebih cepat dari vault "fast" bawaan game.
+-- Satu toggle untuk pallet/running vault ("RunningVaultAnimation", dll) dan
+-- vault window ("WalkingVaultAnimation"). Window cuma dipercepat selama
+-- isvaulting = true dan speed-nya dibatasi WINDOW_MAX_SPEED.
+-- Catatan: ini cuma animasinya; durasi gerak vault asli diatur timer game.
 local VAULT_KEYWORDS = {"vault", "pallet"}
 local WINDOW_KEYWORD = "walkingvault"
 
@@ -530,7 +528,7 @@ local function hasAnyWord(name, list)
 end
 
 track(RunService.Heartbeat:Connect(function()
-    if not (config.fastVault or config.fastVaultWindow) then return end
+    if not config.fastVault then return end
     local char = LocalPlayer.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     local animator = hum and hum:FindFirstChildOfClass("Animator")
@@ -540,15 +538,39 @@ track(RunService.Heartbeat:Connect(function()
         local name = string.lower(t.Name)
         local target
         if hasWord(name, WINDOW_KEYWORD) then
-            if config.fastVaultWindow and char:GetAttribute("isvaulting") == true then
-                target = config.windowVaultSpeed
+            if char:GetAttribute("isvaulting") == true then
+                target = math.min(config.vaultSpeed, WINDOW_MAX_SPEED)
             end
-        elseif config.fastVault and hasAnyWord(name, VAULT_KEYWORDS) then
+        elseif hasAnyWord(name, VAULT_KEYWORDS) then
             target = config.vaultSpeed
         end
         if target and t.Speed ~= target then t:AdjustSpeed(target) end
     end
 end))
+
+----------------------------------------------------------------
+-- Info Vault (tier + alasan, baca-saja)
+----------------------------------------------------------------
+-- Dari log: tier "fast" (VaultReason = ready) cuma keluar kalau lari kenceng
+-- dan lurus ke jendela. "pace" = kurang kenceng, "facing" = kurang lurus.
+local REASON_TEXT = {ready = "mantap", pace = "kurang kenceng", facing = "kurang lurus"}
+local vaultConn
+
+local function hookVaultInfo(char)
+    if vaultConn then vaultConn:Disconnect() vaultConn = nil end
+    vaultConn = char:GetAttributeChangedSignal("__VaultFireCount"):Connect(function()
+        if not config.vaultInfo then return end
+        task.delay(0.1, function()
+            local tier = char:GetAttribute("VaultTier")
+            local reason = char:GetAttribute("VaultReason")
+            if not tier then return end
+            notify("Vault " .. string.upper(tostring(tier)) .. " (" .. (REASON_TEXT[reason] or tostring(reason)) .. ")")
+        end)
+    end)
+end
+
+track(LocalPlayer.CharacterAdded:Connect(hookVaultInfo))
+if LocalPlayer.Character then hookVaultInfo(LocalPlayer.Character) end
 
 ----------------------------------------------------------------
 -- Speed Karakter (angka tetap, aktif pas sprint, lokal)
@@ -991,6 +1013,7 @@ local function unload()
     for _, conns in pairs(playerConns) do disconnectAll(conns) end
     table.clear(playerConns)
     disconnectAll(connections)
+    if vaultConn then vaultConn:Disconnect() vaultConn = nil end
 
     if env.VD_Unload == unload then env.VD_Unload = nil end
     gui:Destroy()
@@ -1003,16 +1026,12 @@ end
 -- Tab: Main
 local mainPage = createTab("Main")
 createSection(mainPage, "Gerakan")
-createToggle(mainPage, "Fast Vault (Pallet)", "fastVault")
+createToggle(mainPage, "Fast Vault (Pallet & Window)", "fastVault")
 createCycle(mainPage, "vaultSpeed", VAULT_PRESETS, function()
     return "Speed Vault: " .. string.format("%.1f", config.vaultSpeed) .. "x"
 end)
-createInfo(mainPage, "Mempercepat animasi vault pallet (lokal). Makin tinggi makin besar risiko kena anticheat.")
-createToggle(mainPage, "Fast Vault (Window)", "fastVaultWindow")
-createCycle(mainPage, "windowVaultSpeed", WINDOW_VAULT_PRESETS, function()
-    return "Speed Window: " .. string.format("%.1f", config.windowVaultSpeed) .. "x"
-end)
-createInfo(mainPage, "Vault window (EXPERIMENTAL). Max 2.6x = setara vault fast bawaan game. Kalau karakter nyangkut/rubberband, matikan toggle-nya.")
+createToggle(mainPage, "Info Vault (tier)", "vaultInfo")
+createInfo(mainPage, "Fast Vault cuma mempercepat ANIMASI (window max 2.6x); durasi vault asli diatur game per tier. Vault beneran cepat (tier FAST) didapat kalau lari kenceng + lurus ke jendela. Info Vault nunjukin tier & alasannya tiap vault: kurang kenceng / kurang lurus.")
 
 createSection(mainPage, "Karakter")
 createToggle(mainPage, "Speed Karakter", "walkOn", walkStep)
