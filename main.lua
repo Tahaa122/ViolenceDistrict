@@ -1,7 +1,13 @@
--- Violence District | by jeysar
+-- Violence District | Tabbed Menu by jeysar
+-- Tab: ESP (Aura / Name terpisah), Misc
 
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+
+if not game:IsLoaded() then game.Loaded:Wait() end
 
 local LocalPlayer = Players.LocalPlayer
 local connections = {}
@@ -12,11 +18,8 @@ local minimized = false
 local COLOR_SURVIVOR = Color3.fromRGB(255, 255, 255)
 local COLOR_KILLER = Color3.fromRGB(255, 50, 50)
 local TOGGLE_KEY = Enum.KeyCode.RightShift
-
-local BLACK = Color3.fromRGB(10, 10, 10)
-local DARK = Color3.fromRGB(25, 25, 25)
-local WHITE = Color3.fromRGB(255, 255, 255)
-local GRAY = Color3.fromRGB(150, 150, 150)
+local FULL_SIZE = UDim2.new(0, 400, 0, 250)
+local MINI_SIZE = UDim2.new(0, 400, 0, 34)
 
 local parentGui = (gethui and gethui()) or game:GetService("CoreGui")
 if parentGui:FindFirstChild("ViolenceDistrict") then
@@ -37,7 +40,7 @@ local function isKiller(plr)
     return false
 end
 
-local function clearESP(plr)
+local function removeESP(plr)
     local d = espData[plr]
     if d then
         if d.highlight then d.highlight:Destroy() end
@@ -46,17 +49,16 @@ local function clearESP(plr)
     end
 end
 
-local function refreshESP(plr)
-    clearESP(plr)
-    if plr == LocalPlayer then return end
-    if not auraOn and not nameOn then return end
+local function applyESP(plr)
+    removeESP(plr)
+    if plr == LocalPlayer or not (auraOn or nameOn) then return end
     local char = plr.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
 
     local killer = isKiller(plr)
     local color = killer and COLOR_KILLER or COLOR_SURVIVOR
-    local d = {killer = killer}
+    local data = {killer = killer}
 
     if auraOn then
         local hl = Instance.new("Highlight")
@@ -68,7 +70,7 @@ local function refreshESP(plr)
         hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
         hl.Adornee = char
         hl.Parent = char
-        d.highlight = hl
+        data.highlight = hl
     end
 
     if nameOn then
@@ -90,31 +92,60 @@ local function refreshESP(plr)
         lbl.Font = Enum.Font.GothamBold
         lbl.TextSize = 13
         lbl.Parent = bb
-        d.billboard = bb
+        data.billboard = bb
     end
 
-    espData[plr] = d
+    espData[plr] = data
 end
 
 local function refreshAll()
-    for _, p in ipairs(Players:GetPlayers()) do refreshESP(p) end
+    for _, p in ipairs(Players:GetPlayers()) do applyESP(p) end
 end
 
 local function setupPlayer(plr)
     if plr == LocalPlayer then return end
     table.insert(connections, plr.CharacterAdded:Connect(function()
         task.wait(0.5)
-        refreshESP(plr)
+        applyESP(plr)
     end))
     table.insert(connections, plr.CharacterRemoving:Connect(function()
-        clearESP(plr)
+        removeESP(plr)
     end))
-    refreshESP(plr)
+    applyESP(plr)
 end
 
 for _, p in ipairs(Players:GetPlayers()) do setupPlayer(p) end
 table.insert(connections, Players.PlayerAdded:Connect(setupPlayer))
-table.insert(connections, Players.PlayerRemoving:Connect(clearESP))
+table.insert(connections, Players.PlayerRemoving:Connect(removeESP))
+
+----------------------------------------------------------------
+-- Misc: Fullbright
+----------------------------------------------------------------
+local fbOn = false
+local fbOriginal = {
+    Brightness = Lighting.Brightness,
+    ClockTime = Lighting.ClockTime,
+    Ambient = Lighting.Ambient,
+    OutdoorAmbient = Lighting.OutdoorAmbient,
+    GlobalShadows = Lighting.GlobalShadows,
+}
+
+local function setFullbright(state)
+    fbOn = state
+    if not state then
+        for k, v in pairs(fbOriginal) do Lighting[k] = v end
+    end
+end
+
+table.insert(connections, RunService.RenderStepped:Connect(function()
+    if fbOn then
+        Lighting.Brightness = 2
+        Lighting.ClockTime = 14
+        Lighting.Ambient = Color3.fromRGB(200, 200, 200)
+        Lighting.OutdoorAmbient = Color3.fromRGB(200, 200, 200)
+        Lighting.GlobalShadows = false
+    end
+end))
 
 ----------------------------------------------------------------
 -- GUI
@@ -124,260 +155,276 @@ gui.Name = "ViolenceDistrict"
 gui.ResetOnSpawn = false
 gui.Parent = parentGui
 
+local main = Instance.new("Frame")
+main.Name = "Main"
+main.Size = FULL_SIZE
+main.Position = UDim2.new(0.5, -200, 0.5, -125)
+main.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+main.BorderSizePixel = 0
+main.ClipsDescendants = true
+main.Parent = gui
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 10)
+
+local glow = Instance.new("UIStroke")
+glow.Color = Color3.new(1, 1, 1)
+glow.Thickness = 1.5
+glow.Transparency = 0.2
+glow.Parent = main
+
+task.spawn(function()
+    while gui.Parent do
+        TweenService:Create(glow, TweenInfo.new(1.2, Enum.EasingStyle.Sine), {Transparency = 0.7}):Play()
+        task.wait(1.2)
+        if not gui.Parent then break end
+        TweenService:Create(glow, TweenInfo.new(1.2, Enum.EasingStyle.Sine), {Transparency = 0.1}):Play()
+        task.wait(1.2)
+    end
+end)
+
 -- Refresh warna kalau role berubah
 task.spawn(function()
     while gui.Parent do
         task.wait(1)
         if auraOn or nameOn then
             for plr, d in pairs(espData) do
-                if d.killer ~= isKiller(plr) then refreshESP(plr) end
+                if d.killer ~= isKiller(plr) then applyESP(plr) end
             end
         end
     end
 end)
 
-local FULL_H = 190
-
-local main = Instance.new("Frame")
-main.Name = "Main"
-main.Size = UDim2.new(0, 280, 0, FULL_H)
-main.Position = UDim2.new(0.5, -140, 0.5, -FULL_H / 2)
-main.BackgroundColor3 = BLACK
-main.BorderSizePixel = 0
-main.ClipsDescendants = true
-main.Parent = gui
-
-local border = Instance.new("UIStroke")
-border.Color = WHITE
-border.Thickness = 1
-border.Parent = main
-
 -- Title bar
 local top = Instance.new("Frame")
-top.Size = UDim2.new(1, 0, 0, 32)
-top.BackgroundColor3 = DARK
+top.Size = UDim2.new(1, 0, 0, 34)
+top.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
 top.BorderSizePixel = 0
 top.Parent = main
 
 local titleHolder = Instance.new("Frame")
-titleHolder.Size = UDim2.new(1, -70, 1, 0)
-titleHolder.Position = UDim2.new(0, 10, 0, 0)
+titleHolder.Size = UDim2.new(1, -80, 1, 0)
+titleHolder.Position = UDim2.new(0, 12, 0, 0)
 titleHolder.BackgroundTransparency = 1
 titleHolder.Parent = top
 
-local layout = Instance.new("UIListLayout")
-layout.FillDirection = Enum.FillDirection.Horizontal
-layout.VerticalAlignment = Enum.VerticalAlignment.Center
-layout.Padding = UDim.new(0, 6)
-layout.Parent = titleHolder
+local tl = Instance.new("UIListLayout", titleHolder)
+tl.FillDirection = Enum.FillDirection.Horizontal
+tl.VerticalAlignment = Enum.VerticalAlignment.Center
+tl.Padding = UDim.new(0, 6)
 
 local title = Instance.new("TextLabel")
 title.AutomaticSize = Enum.AutomaticSize.X
 title.Size = UDim2.new(0, 0, 1, 0)
 title.BackgroundTransparency = 1
 title.Text = "VIOLENCE DISTRICT"
-title.TextColor3 = WHITE
-title.Font = Enum.Font.GothamBold
+title.TextColor3 = Color3.new(1, 1, 1)
+title.Font = Enum.Font.GothamBlack
 title.TextSize = 13
 title.Parent = titleHolder
 
-local watermark = Instance.new("TextLabel")
-watermark.AutomaticSize = Enum.AutomaticSize.X
-watermark.Size = UDim2.new(0, 0, 1, 0)
-watermark.BackgroundTransparency = 1
-watermark.Text = "by jeysar"
-watermark.TextColor3 = GRAY
-watermark.Font = Enum.Font.Gotham
-watermark.TextSize = 8
-watermark.Parent = titleHolder
+local wm = Instance.new("TextLabel")
+wm.AutomaticSize = Enum.AutomaticSize.X
+wm.Size = UDim2.new(0, 0, 1, 0)
+wm.BackgroundTransparency = 1
+wm.Text = "by jeysar"
+wm.TextColor3 = Color3.fromRGB(140, 140, 140)
+wm.Font = Enum.Font.Gotham
+wm.TextSize = 8
+wm.Parent = titleHolder
 
 local function makeTopBtn(text, xOffset)
     local b = Instance.new("TextButton")
     b.Size = UDim2.new(0, 26, 0, 22)
-    b.Position = UDim2.new(1, xOffset, 0, 5)
-    b.BackgroundColor3 = BLACK
-    b.BorderSizePixel = 1
-    b.BorderColor3 = WHITE
+    b.Position = UDim2.new(1, xOffset, 0, 6)
+    b.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
     b.Text = text
-    b.TextColor3 = WHITE
+    b.TextColor3 = Color3.new(1, 1, 1)
     b.Font = Enum.Font.GothamBold
     b.TextSize = 14
-    b.AutoButtonColor = false
     b.Parent = top
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+    local s = Instance.new("UIStroke", b)
+    s.Color = Color3.new(1, 1, 1)
+    s.Transparency = 0.6
     return b
 end
 
-local minBtn = makeTopBtn("-", -58)
-local closeBtn = makeTopBtn("X", -30)
+local minBtn = makeTopBtn("–", -62)
+local closeBtn = makeTopBtn("X", -32)
 
--- Tab bar
-local tabBar = Instance.new("Frame")
-tabBar.Size = UDim2.new(1, 0, 0, 28)
-tabBar.Position = UDim2.new(0, 0, 0, 32)
-tabBar.BackgroundColor3 = BLACK
-tabBar.BorderSizePixel = 0
-tabBar.Parent = main
+-- Body
+local body = Instance.new("Frame")
+body.Size = UDim2.new(1, 0, 1, -34)
+body.Position = UDim2.new(0, 0, 0, 34)
+body.BackgroundTransparency = 1
+body.Parent = main
 
-local tabLayout = Instance.new("UIListLayout")
-tabLayout.FillDirection = Enum.FillDirection.Horizontal
-tabLayout.Padding = UDim.new(0, 0)
-tabLayout.Parent = tabBar
+-- Sidebar
+local sidebar = Instance.new("Frame")
+sidebar.Size = UDim2.new(0, 100, 1, 0)
+sidebar.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+sidebar.BorderSizePixel = 0
+sidebar.Parent = body
 
-local content = Instance.new("Frame")
-content.Size = UDim2.new(1, 0, 1, -60)
-content.Position = UDim2.new(0, 0, 0, 60)
-content.BackgroundTransparency = 1
-content.Parent = main
+local sl = Instance.new("UIListLayout", sidebar)
+sl.Padding = UDim.new(0, 6)
+local sp = Instance.new("UIPadding", sidebar)
+sp.PaddingTop = UDim.new(0, 10)
+sp.PaddingLeft = UDim.new(0, 8)
+sp.PaddingRight = UDim.new(0, 8)
 
-local pages, tabButtons = {}, {}
+local pages = Instance.new("Frame")
+pages.Size = UDim2.new(1, -100, 1, 0)
+pages.Position = UDim2.new(0, 100, 0, 0)
+pages.BackgroundTransparency = 1
+pages.Parent = body
+
+local tabs = {}
+
+local function createPage()
+    local p = Instance.new("Frame")
+    p.Size = UDim2.new(1, 0, 1, 0)
+    p.BackgroundTransparency = 1
+    p.Visible = false
+    p.Parent = pages
+    local l = Instance.new("UIListLayout", p)
+    l.Padding = UDim.new(0, 8)
+    local pad = Instance.new("UIPadding", p)
+    pad.PaddingTop = UDim.new(0, 12)
+    pad.PaddingLeft = UDim.new(0, 12)
+    pad.PaddingRight = UDim.new(0, 12)
+    return p
+end
 
 local function selectTab(name)
-    for n, page in pairs(pages) do
-        page.Visible = (n == name)
-        local b = tabButtons[n]
-        b.BackgroundColor3 = (n == name) and WHITE or BLACK
-        b.TextColor3 = (n == name) and BLACK or WHITE
+    for n, t in pairs(tabs) do
+        local active = (n == name)
+        t.page.Visible = active
+        TweenService:Create(t.btn, TweenInfo.new(0.15), {
+            BackgroundColor3 = active and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(28, 28, 28),
+            TextColor3 = active and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(200, 200, 200),
+        }):Play()
     end
 end
 
-local function makeTab(name, width)
+local function createTab(name)
     local b = Instance.new("TextButton")
-    b.Size = UDim2.new(0, width, 1, 0)
-    b.BackgroundColor3 = BLACK
-    b.BorderSizePixel = 1
-    b.BorderColor3 = WHITE
+    b.Size = UDim2.new(1, 0, 0, 30)
+    b.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
     b.Text = name
-    b.TextColor3 = WHITE
+    b.TextColor3 = Color3.fromRGB(200, 200, 200)
     b.Font = Enum.Font.GothamBold
     b.TextSize = 12
     b.AutoButtonColor = false
-    b.Parent = tabBar
-    tabButtons[name] = b
-
-    local page = Instance.new("Frame")
-    page.Size = UDim2.new(1, 0, 1, 0)
-    page.BackgroundTransparency = 1
-    page.Visible = false
-    page.Parent = content
-    pages[name] = page
-
+    b.Parent = sidebar
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+    local page = createPage()
+    tabs[name] = {btn = b, page = page}
     b.MouseButton1Click:Connect(function() selectTab(name) end)
     return page
 end
 
-local espPage = makeTab("ESP", 140)
-local miscPage = makeTab("Misc", 140)
-
--- Komponen toggle
-local function makeToggle(parent, text, y, callback)
+local function createToggle(parent, text, callback)
     local row = Instance.new("Frame")
-    row.Size = UDim2.new(1, -20, 0, 28)
-    row.Position = UDim2.new(0, 10, 0, y)
-    row.BackgroundTransparency = 1
+    row.Size = UDim2.new(1, 0, 0, 34)
+    row.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
     row.Parent = parent
+    Instance.new("UICorner", row).CornerRadius = UDim.new(0, 8)
+    local rs = Instance.new("UIStroke", row)
+    rs.Color = Color3.new(1, 1, 1)
+    rs.Transparency = 0.85
 
     local lbl = Instance.new("TextLabel")
-    lbl.Size = UDim2.new(1, -60, 1, 0)
+    lbl.Size = UDim2.new(1, -70, 1, 0)
+    lbl.Position = UDim2.new(0, 12, 0, 0)
     lbl.BackgroundTransparency = 1
     lbl.Text = text
-    lbl.TextColor3 = WHITE
-    lbl.Font = Enum.Font.Gotham
+    lbl.TextColor3 = Color3.new(1, 1, 1)
+    lbl.Font = Enum.Font.GothamMedium
     lbl.TextSize = 13
     lbl.TextXAlignment = Enum.TextXAlignment.Left
     lbl.Parent = row
 
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0, 50, 0, 22)
-    btn.Position = UDim2.new(1, -50, 0.5, -11)
-    btn.BackgroundColor3 = BLACK
-    btn.BorderSizePixel = 1
-    btn.BorderColor3 = WHITE
-    btn.Text = "OFF"
-    btn.TextColor3 = WHITE
-    btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 11
-    btn.AutoButtonColor = false
-    btn.Parent = row
+    local sw = Instance.new("TextButton")
+    sw.Size = UDim2.new(0, 44, 0, 20)
+    sw.Position = UDim2.new(1, -54, 0.5, -10)
+    sw.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    sw.Text = ""
+    sw.AutoButtonColor = false
+    sw.Parent = row
+    Instance.new("UICorner", sw).CornerRadius = UDim.new(1, 0)
+    local ss = Instance.new("UIStroke", sw)
+    ss.Color = Color3.new(1, 1, 1)
+    ss.Transparency = 0.5
+
+    local knob = Instance.new("Frame")
+    knob.Size = UDim2.new(0, 14, 0, 14)
+    knob.Position = UDim2.new(0, 3, 0.5, -7)
+    knob.BackgroundColor3 = Color3.fromRGB(120, 120, 120)
+    knob.Parent = sw
+    Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
 
     local state = false
-    btn.MouseButton1Click:Connect(function()
+    sw.MouseButton1Click:Connect(function()
         state = not state
-        btn.Text = state and "ON" or "OFF"
-        btn.BackgroundColor3 = state and WHITE or BLACK
-        btn.TextColor3 = state and BLACK or WHITE
+        TweenService:Create(knob, TweenInfo.new(0.2), {
+            Position = state and UDim2.new(1, -17, 0.5, -7) or UDim2.new(0, 3, 0.5, -7),
+            BackgroundColor3 = state and Color3.new(1, 1, 1) or Color3.fromRGB(120, 120, 120),
+        }):Play()
+        TweenService:Create(sw, TweenInfo.new(0.2), {
+            BackgroundColor3 = state and Color3.fromRGB(70, 70, 70) or Color3.fromRGB(30, 30, 30),
+        }):Play()
         callback(state)
     end)
 end
 
--- Tab ESP
-makeToggle(espPage, "Aura Player", 12, function(s)
-    auraOn = s
-    refreshAll()
-end)
-makeToggle(espPage, "Nama Player", 46, function(s)
-    nameOn = s
-    refreshAll()
-end)
+local function createInfo(parent, text)
+    local l = Instance.new("TextLabel")
+    l.Size = UDim2.new(1, 0, 0, 30)
+    l.BackgroundTransparency = 1
+    l.Text = text
+    l.TextColor3 = Color3.fromRGB(140, 140, 140)
+    l.Font = Enum.Font.Gotham
+    l.TextSize = 11
+    l.TextWrapped = true
+    l.TextXAlignment = Enum.TextXAlignment.Left
+    l.TextYAlignment = Enum.TextYAlignment.Top
+    l.Parent = parent
+end
 
-local hint = Instance.new("TextLabel")
-hint.Size = UDim2.new(1, -20, 0, 30)
-hint.Position = UDim2.new(0, 10, 0, 86)
-hint.BackgroundTransparency = 1
-hint.Text = "Putih = Survivor | Merah = Killer"
-hint.TextColor3 = GRAY
-hint.Font = Enum.Font.Gotham
-hint.TextSize = 11
-hint.TextXAlignment = Enum.TextXAlignment.Left
-hint.Parent = espPage
+-- Tab: ESP
+local espPage = createTab("ESP")
+createToggle(espPage, "Aura Player", function(s) auraOn = s; refreshAll() end)
+createToggle(espPage, "Nama Player", function(s) nameOn = s; refreshAll() end)
+createInfo(espPage, "Putih = Survivor | Merah = Killer")
 
--- Tab Misc
-local miscInfo = Instance.new("TextLabel")
-miscInfo.Size = UDim2.new(1, -20, 0, 30)
-miscInfo.Position = UDim2.new(0, 10, 0, 12)
-miscInfo.BackgroundTransparency = 1
-miscInfo.Text = "RightShift = show/hide panel"
-miscInfo.TextColor3 = GRAY
-miscInfo.Font = Enum.Font.Gotham
-miscInfo.TextSize = 11
-miscInfo.TextXAlignment = Enum.TextXAlignment.Left
-miscInfo.Parent = miscPage
-
-local unloadBtn = Instance.new("TextButton")
-unloadBtn.Size = UDim2.new(1, -20, 0, 28)
-unloadBtn.Position = UDim2.new(0, 10, 0, 50)
-unloadBtn.BackgroundColor3 = BLACK
-unloadBtn.BorderSizePixel = 1
-unloadBtn.BorderColor3 = WHITE
-unloadBtn.Text = "UNLOAD"
-unloadBtn.TextColor3 = WHITE
-unloadBtn.Font = Enum.Font.GothamBold
-unloadBtn.TextSize = 12
-unloadBtn.AutoButtonColor = false
-unloadBtn.Parent = miscPage
+-- Tab: Misc
+local miscPage = createTab("Misc")
+createToggle(miscPage, "Fullbright", setFullbright)
+createInfo(miscPage, "RightShift = show/hide panel (PC)")
 
 selectTab("ESP")
 
--- Unload
-local function unload()
+----------------------------------------------------------------
+-- Minimize / Unload / Keybind / Drag
+----------------------------------------------------------------
+minBtn.MouseButton1Click:Connect(function()
+    minimized = not minimized
+    body.Visible = not minimized
+    TweenService:Create(main, TweenInfo.new(0.25, Enum.EasingStyle.Quad), {
+        Size = minimized and MINI_SIZE or FULL_SIZE
+    }):Play()
+    minBtn.Text = minimized and "+" or "–"
+end)
+
+closeBtn.MouseButton1Click:Connect(function()
     auraOn, nameOn = false, false
-    for p in pairs(espData) do clearESP(p) end
+    for p in pairs(espData) do removeESP(p) end
+    setFullbright(false)
     for _, c in ipairs(connections) do pcall(function() c:Disconnect() end) end
     table.clear(connections)
     gui:Destroy()
-end
-closeBtn.MouseButton1Click:Connect(unload)
-unloadBtn.MouseButton1Click:Connect(unload)
-
--- Minimize
-minBtn.MouseButton1Click:Connect(function()
-    minimized = not minimized
-    content.Visible = not minimized
-    tabBar.Visible = not minimized
-    main.Size = minimized and UDim2.new(0, 280, 0, 32) or UDim2.new(0, 280, 0, FULL_H)
-    minBtn.Text = minimized and "+" or "-"
 end)
 
--- Keybind show/hide
 table.insert(connections, UIS.InputBegan:Connect(function(input, processed)
     if processed then return end
     if input.KeyCode == TOGGLE_KEY then
@@ -385,7 +432,6 @@ table.insert(connections, UIS.InputBegan:Connect(function(input, processed)
     end
 end))
 
--- Drag
 local dragging, dragStart, startPos
 top.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
