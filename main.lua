@@ -37,6 +37,9 @@ local FULL_SIZE = UDim2.new(0, 440, 0, 290)
 local MINI_SIZE = UDim2.new(0, 440, 0, 34)
 local DISTANCE_PRESETS = {100, 150, 250, 0} -- 0 = tanpa batas
 local VAULT_PRESETS = {1.5, 1.7, 2.0, 2.5, 3.0}
+-- batas atas window dihitung dari log: vault "fast" bawaan game ~0.43s,
+-- window normal ~0.83s -> maksimal ~2.6x biar nggak lebih cepat dari yang game sendiri izinkan
+local WINDOW_VAULT_PRESETS = {2.0, 2.3, 2.6}
 local CONFIG_FILE = "ViolenceDistrict_config.json"
 
 local DEFAULTS = {
@@ -49,6 +52,8 @@ local DEFAULTS = {
     nofog = false,
     fastVault = false,
     vaultSpeed = 2.0,
+    fastVaultWindow = false,
+    windowVaultSpeed = 2.0,
     walkOn = false,
     walkSpeed = 17,
     distance = 150,
@@ -506,20 +511,26 @@ end))
 ----------------------------------------------------------------
 -- Fast Vault (percepat animasi vault pallet, lokal)
 ----------------------------------------------------------------
--- Animasi vault window ("WalkingVaultAnimation") sengaja dikecualikan:
--- jalurnya lewat NetMotion/anticheat game dan error kalau animasinya diubah.
+-- Pallet/running vault ("RunningVaultAnimation", dll) dan vault window
+-- ("WalkingVaultAnimation") punya toggle & speed sendiri.
+-- Window cuma dipercepat selama atribut isvaulting = true (dari log), dan
+-- batas speed-nya dibuat nggak lebih cepat dari vault "fast" bawaan game.
 local VAULT_KEYWORDS = {"vault", "pallet"}
-local VAULT_EXCLUDE = {"walkingvault"}
+local WINDOW_KEYWORD = "walkingvault"
 
-local function nameHasAny(name, list)
+local function hasWord(name, word)
+    return string.find(name, word, 1, true) ~= nil
+end
+
+local function hasAnyWord(name, list)
     for _, word in ipairs(list) do
-        if string.find(name, word, 1, true) then return true end
+        if hasWord(name, word) then return true end
     end
     return false
 end
 
 track(RunService.Heartbeat:Connect(function()
-    if not config.fastVault then return end
+    if not (config.fastVault or config.fastVaultWindow) then return end
     local char = LocalPlayer.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     local animator = hum and hum:FindFirstChildOfClass("Animator")
@@ -527,11 +538,15 @@ track(RunService.Heartbeat:Connect(function()
 
     for _, t in ipairs(animator:GetPlayingAnimationTracks()) do
         local name = string.lower(t.Name)
-        if not nameHasAny(name, VAULT_EXCLUDE)
-            and nameHasAny(name, VAULT_KEYWORDS)
-            and t.Speed ~= config.vaultSpeed then
-            t:AdjustSpeed(config.vaultSpeed)
+        local target
+        if hasWord(name, WINDOW_KEYWORD) then
+            if config.fastVaultWindow and char:GetAttribute("isvaulting") == true then
+                target = config.windowVaultSpeed
+            end
+        elseif config.fastVault and hasAnyWord(name, VAULT_KEYWORDS) then
+            target = config.vaultSpeed
         end
+        if target and t.Speed ~= target then t:AdjustSpeed(target) end
     end
 end))
 
@@ -992,7 +1007,12 @@ createToggle(mainPage, "Fast Vault (Pallet)", "fastVault")
 createCycle(mainPage, "vaultSpeed", VAULT_PRESETS, function()
     return "Speed Vault: " .. string.format("%.1f", config.vaultSpeed) .. "x"
 end)
-createInfo(mainPage, "Mempercepat animasi vault pallet (lokal). Vault window sengaja nggak diubah. Makin tinggi makin besar risiko kena anticheat.")
+createInfo(mainPage, "Mempercepat animasi vault pallet (lokal). Makin tinggi makin besar risiko kena anticheat.")
+createToggle(mainPage, "Fast Vault (Window)", "fastVaultWindow")
+createCycle(mainPage, "windowVaultSpeed", WINDOW_VAULT_PRESETS, function()
+    return "Speed Window: " .. string.format("%.1f", config.windowVaultSpeed) .. "x"
+end)
+createInfo(mainPage, "Vault window (EXPERIMENTAL). Max 2.6x = setara vault fast bawaan game. Kalau karakter nyangkut/rubberband, matikan toggle-nya.")
 
 createSection(mainPage, "Karakter")
 createToggle(mainPage, "Speed Karakter", "walkOn", walkStep)
