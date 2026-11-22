@@ -1,10 +1,11 @@
--- Violence District | Menu v1.2 by jeysar
+-- Violence District | Menu v1.1 by jeysar
 -- Tab: Main, ESP, Visual, Settings
 
-local VERSION = "v1.3"
+local VERSION = "v1.1"
 
-print("[Violence District " .. VERSION .. "] Loading...")
-
+----------------------------------------------------------------
+-- Services
+----------------------------------------------------------------
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
@@ -16,13 +17,21 @@ if not game:IsLoaded() then game.Loaded:Wait() end
 
 local LocalPlayer = Players.LocalPlayer
 
+-- Kalau script dijalankan ulang, matikan instance lama dulu
+-- (biar koneksi lama nggak numpuk dan nggak dobel jalan)
+local env = (getgenv and getgenv()) or _G
+if env.VD_Unload then pcall(env.VD_Unload) end
+
+print("[Violence District " .. VERSION .. "] Loading...")
+
 ----------------------------------------------------------------
 -- Konstanta & Config
 ----------------------------------------------------------------
 local COLOR_SURVIVOR = Color3.fromRGB(255, 255, 255)
 local COLOR_KILLER = Color3.fromRGB(255, 50, 50)
 local COLOR_PALLET = Color3.fromRGB(255, 200, 0)
-local COLOR_GENERATOR = Color3.fromRGB(170, 70, 255) -- ungu
+local COLOR_GENERATOR = Color3.fromRGB(170, 70, 255)
+
 local TOGGLE_KEY = Enum.KeyCode.RightShift
 local FULL_SIZE = UDim2.new(0, 440, 0, 290)
 local MINI_SIZE = UDim2.new(0, 440, 0, 34)
@@ -30,21 +39,25 @@ local DISTANCE_PRESETS = {100, 150, 250, 0} -- 0 = tanpa batas
 local VAULT_PRESETS = {1.5, 1.7, 2.0, 2.5, 3.0}
 local CONFIG_FILE = "ViolenceDistrict_config.json"
 
-local config = {
+local DEFAULTS = {
     aura = false,
     name = false,
     eyes = false,
     generator = false,
     genProgress = true,
     fullbright = false,
+    nofog = false,
     fastVault = false,
     vaultSpeed = 2.0,
     walkOn = false,
     walkSpeed = 17,
-    moonwalk = false,
-    nofog = false,
     distance = 150,
+    antiAfk = true,
+    notifications = true,
 }
+
+local config = {}
+for k, v in pairs(DEFAULTS) do config[k] = v end
 
 local function loadConfig()
     if not (isfile and readfile) then return end
@@ -54,6 +67,7 @@ local function loadConfig()
     end)
     if ok and type(data) == "table" then
         for k, v in pairs(data) do
+            -- key lama (misal "moonwalk") otomatis diabaikan
             if config[k] ~= nil and type(v) == type(config[k]) then
                 config[k] = v
             end
@@ -63,10 +77,9 @@ end
 
 local function saveConfig()
     if not writefile then return false end
-    local ok = pcall(function()
+    return (pcall(function()
         writefile(CONFIG_FILE, HttpService:JSONEncode(config))
-    end)
-    return ok
+    end))
 end
 
 loadConfig()
@@ -78,7 +91,18 @@ local connections = {}
 local espData = {}
 local objESP = {}
 local playerConns = {}
+local syncers = {} -- sinkronisasi UI <- config (dipakai buat Reset Config)
 local minimized = false
+
+local function track(conn)
+    table.insert(connections, conn)
+    return conn
+end
+
+local function disconnectAll(list)
+    for _, c in ipairs(list) do pcall(function() c:Disconnect() end) end
+    table.clear(list)
+end
 
 local function make(class, props, parent)
     local inst = Instance.new(class)
@@ -105,16 +129,19 @@ local function nextOrder(parent)
 end
 
 local parentGui = (gethui and gethui()) or game:GetService("CoreGui")
-if parentGui:FindFirstChild("ViolenceDistrict") then
-    parentGui.ViolenceDistrict:Destroy()
-end
+local oldGui = parentGui:FindFirstChild("ViolenceDistrict")
+if oldGui then oldGui:Destroy() end
 
 local gui = make("ScreenGui", {Name = "ViolenceDistrict", ResetOnSpawn = false}, parentGui)
 
--- Toast notifikasi kecil
+----------------------------------------------------------------
+-- Toast notifikasi
+----------------------------------------------------------------
 local toast = make("TextLabel", {
-    Size = UDim2.new(0, 190, 0, 26),
-    Position = UDim2.new(0.5, -95, 1, -60),
+    AutomaticSize = Enum.AutomaticSize.X,
+    Size = UDim2.new(0, 0, 0, 26),
+    AnchorPoint = Vector2.new(0.5, 0),
+    Position = UDim2.new(0.5, 0, 1, -60),
     BackgroundColor3 = Color3.fromRGB(20, 20, 20),
     BackgroundTransparency = 1,
     TextColor3 = Color3.new(1, 1, 1),
@@ -125,9 +152,11 @@ local toast = make("TextLabel", {
     ZIndex = 10,
 }, gui)
 corner(toast, 8)
+make("UIPadding", {PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12)}, toast)
 
 local toastSeq = 0
-local function notify(text)
+local function notify(text, force)
+    if not (config.notifications or force) then return end
     toastSeq += 1
     local id = toastSeq
     toast.Text = text
@@ -146,23 +175,19 @@ end
 -- ESP Player (aura + nama + jarak)
 ----------------------------------------------------------------
 local function isKiller(plr)
-    if plr.Team and string.find(string.lower(plr.Team.Name), "killer") then
+    if plr.Team and string.find(string.lower(plr.Team.Name), "killer", 1, true) then
         return true
     end
     local role = plr:GetAttribute("Role") or (plr.Character and plr.Character:GetAttribute("Role"))
-    if role and string.find(string.lower(tostring(role)), "killer") then
-        return true
-    end
-    return false
+    return role ~= nil and string.find(string.lower(tostring(role)), "killer", 1, true) ~= nil
 end
 
 local function removeESP(plr)
     local d = espData[plr]
-    if d then
-        if d.highlight then d.highlight:Destroy() end
-        if d.billboard then d.billboard:Destroy() end
-        espData[plr] = nil
-    end
+    if not d then return end
+    if d.highlight then d.highlight:Destroy() end
+    if d.billboard then d.billboard:Destroy() end
+    espData[plr] = nil
 end
 
 local function applyESP(plr)
@@ -218,14 +243,17 @@ end
 local function setupPlayer(plr)
     if plr == LocalPlayer then return end
     local conns = {}
+    local charConn -- koneksi atribut Role di karakter saat ini
     playerConns[plr] = conns
     local function refresh() applyESP(plr) end
 
     local function onCharacter(char)
         char:WaitForChild("HumanoidRootPart", 10)
         if not char.Parent then return end
+        if charConn then charConn:Disconnect() end
+        charConn = char:GetAttributeChangedSignal("Role"):Connect(refresh)
+        table.insert(conns, charConn)
         applyESP(plr)
-        table.insert(conns, char:GetAttributeChangedSignal("Role"):Connect(refresh))
     end
 
     table.insert(conns, plr.CharacterAdded:Connect(function(char)
@@ -242,14 +270,14 @@ local function cleanupPlayer(plr)
     removeESP(plr)
     local conns = playerConns[plr]
     if conns then
-        for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
+        disconnectAll(conns)
         playerConns[plr] = nil
     end
 end
 
 for _, p in ipairs(Players:GetPlayers()) do setupPlayer(p) end
-table.insert(connections, Players.PlayerAdded:Connect(setupPlayer))
-table.insert(connections, Players.PlayerRemoving:Connect(cleanupPlayer))
+track(Players.PlayerAdded:Connect(setupPlayer))
+track(Players.PlayerRemoving:Connect(cleanupPlayer))
 
 ----------------------------------------------------------------
 -- ESP Objek (Pallet & Generator)
@@ -259,28 +287,23 @@ local function progressColor(progress)
     local red = Color3.fromRGB(255, 60, 60)
     local yellow = Color3.fromRGB(255, 220, 60)
     local green = Color3.fromRGB(80, 255, 120)
-    if t < 0.5 then
-        return red:Lerp(yellow, t * 2)
-    end
+    if t < 0.5 then return red:Lerp(yellow, t * 2) end
     return yellow:Lerp(green, (t - 0.5) * 2)
 end
 
 local OBJ_COLORS = {pallet = COLOR_PALLET, generator = COLOR_GENERATOR}
 
--- Filter berdasarkan struktur map (dari data perk):
---   Pallet asli  : Workspace.Map.pallets.<Newpallet>
---   Window asli  : part di dalam Workspace.Map.Window
---   Generator    : Model dengan atribut RepairProgress
+-- Filter berdasarkan struktur map:
+--   Pallet    : Workspace.Map.pallets.<Newpallet>
+--   Generator : Model dengan atribut RepairProgress
 local function getKind(inst)
-    if inst:IsA("Model") then
-        if inst:GetAttribute("RepairProgress") ~= nil or inst.Name == "Generator" then
-            return "generator"
-        end
+    if inst:IsA("Model")
+        and (inst:GetAttribute("RepairProgress") ~= nil or inst.Name == "Generator") then
+        return "generator"
     end
     local parent = inst.Parent
-    if not parent then return nil end
-    local parentName = string.lower(parent.Name)
-    if (inst:IsA("Model") or inst:IsA("BasePart")) and parentName == "pallets" then
+    if parent and (inst:IsA("Model") or inst:IsA("BasePart"))
+        and string.lower(parent.Name) == "pallets" then
         return "pallet"
     end
     return nil
@@ -288,19 +311,16 @@ end
 
 local function removeObj(inst)
     local d = objESP[inst]
-    if d then
-        for _, c in ipairs(d.conns) do pcall(function() c:Disconnect() end) end
-        if d.hl then d.hl:Destroy() end
-        if d.bb then d.bb:Destroy() end
-        objESP[inst] = nil
-    end
+    if not d then return end
+    disconnectAll(d.conns)
+    if d.hl then d.hl:Destroy() end
+    if d.bb then d.bb:Destroy() end
+    objESP[inst] = nil
 end
 
 local function refreshGen(inst, d)
     local progress = math.clamp(inst:GetAttribute("RepairProgress") or 0, 0, 100)
     d.done = inst:GetAttribute("Completed") == true or progress >= 100
-    d.hl.FillColor = COLOR_GENERATOR
-    d.hl.OutlineColor = COLOR_GENERATOR
     if d.done then d.hl.Enabled = false end
 
     if d.bb then
@@ -308,14 +328,50 @@ local function refreshGen(inst, d)
         d.label.Text = math.floor(progress + 0.5) .. "%"
         TweenService:Create(d.fill, TweenInfo.new(0.25), {
             Size = UDim2.new(progress / 100, 0, 1, 0),
+            BackgroundColor3 = progressColor(progress),
         }):Play()
     end
 end
 
-local function refreshGenColors()
+local function refreshGenAll()
     for inst, d in pairs(objESP) do
         if d.kind == "generator" then refreshGen(inst, d) end
     end
+end
+
+local function buildGenBar(d, anchor)
+    d.bb = make("BillboardGui", {
+        Name = "VD_GenProgress",
+        Size = UDim2.new(0, 90, 0, 24),
+        StudsOffset = Vector3.new(0, 4, 0),
+        AlwaysOnTop = true,
+        Adornee = anchor,
+    }, gui)
+    local bg = make("Frame", {
+        Size = UDim2.new(1, 0, 0, 10),
+        Position = UDim2.new(0, 0, 0, 12),
+        BackgroundColor3 = Color3.fromRGB(20, 20, 20),
+        BackgroundTransparency = 0.2,
+        BorderSizePixel = 0,
+    }, d.bb)
+    corner(bg, 4)
+    stroke(bg, 0.3, COLOR_PALLET)
+    d.fill = make("Frame", {
+        Size = UDim2.new(0, 0, 1, 0),
+        BackgroundColor3 = progressColor(0),
+        BorderSizePixel = 0,
+    }, bg)
+    corner(d.fill, 4)
+    d.label = make("TextLabel", {
+        Size = UDim2.new(1, 0, 0, 12),
+        BackgroundTransparency = 1,
+        Text = "0%",
+        TextColor3 = Color3.new(1, 1, 1),
+        TextStrokeColor3 = Color3.new(0, 0, 0),
+        TextStrokeTransparency = 0.3,
+        Font = Enum.Font.GothamBold,
+        TextSize = 12,
+    }, d.bb)
 end
 
 local function applyObj(inst)
@@ -335,8 +391,11 @@ local function applyObj(inst)
     end
 
     local color = OBJ_COLORS[kind]
-    local hl, vizProp
-    do
+    local d = {
+        kind = kind,
+        conns = {},
+        done = false,
+        -- Highlight ditaruh di gui biar map nggak ke-modif
         hl = make("Highlight", {
             Name = "VD_Obj",
             FillColor = color,
@@ -345,47 +404,13 @@ local function applyObj(inst)
             OutlineTransparency = 0,
             DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,
             Adornee = inst,
-        }, gui) -- ditaruh di gui biar map nggak ke-modif
-        vizProp = "Enabled"
-    end
-
-    local d = {hl = hl, vizProp = vizProp, kind = kind, conns = {}, done = false}
+        }, gui),
+    }
     objESP[inst] = d
 
     if kind == "generator" then
         local anchor = (inst:IsA("Model") and (inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true))) or inst
-        d.bb = make("BillboardGui", {
-            Name = "VD_GenProgress",
-            Size = UDim2.new(0, 90, 0, 24),
-            StudsOffset = Vector3.new(0, 4, 0),
-            AlwaysOnTop = true,
-            Adornee = anchor,
-        }, gui)
-        local bg = make("Frame", {
-            Size = UDim2.new(1, 0, 0, 10),
-            Position = UDim2.new(0, 0, 0, 12),
-            BackgroundColor3 = Color3.fromRGB(20, 20, 20),
-            BackgroundTransparency = 0.2,
-            BorderSizePixel = 0,
-        }, d.bb)
-        corner(bg, 4)
-        stroke(bg, 0.3, COLOR_PALLET)
-        d.fill = make("Frame", {
-            Size = UDim2.new(0, 0, 1, 0),
-            BackgroundColor3 = COLOR_PALLET,
-            BorderSizePixel = 0,
-        }, bg)
-        corner(d.fill, 4)
-        d.label = make("TextLabel", {
-            Size = UDim2.new(1, 0, 0, 12),
-            BackgroundTransparency = 1,
-            Text = "0%",
-            TextColor3 = Color3.new(1, 1, 1),
-            TextStrokeColor3 = Color3.new(0, 0, 0),
-            TextStrokeTransparency = 0.3,
-            Font = Enum.Font.GothamBold,
-            TextSize = 12,
-        }, d.bb)
+        buildGenBar(d, anchor)
     end
 
     table.insert(d.conns, inst.AncestryChanged:Connect(function()
@@ -393,13 +418,10 @@ local function applyObj(inst)
     end))
 
     if kind == "generator" then
-        table.insert(d.conns, inst:GetAttributeChangedSignal("RepairProgress"):Connect(function()
-            refreshGen(inst, d)
-        end))
-        table.insert(d.conns, inst:GetAttributeChangedSignal("Completed"):Connect(function()
-            refreshGen(inst, d)
-        end))
-        refreshGen(inst, d)
+        local function onChanged() refreshGen(inst, d) end
+        table.insert(d.conns, inst:GetAttributeChangedSignal("RepairProgress"):Connect(onChanged))
+        table.insert(d.conns, inst:GetAttributeChangedSignal("Completed"):Connect(onChanged))
+        onChanged()
     end
 end
 
@@ -409,7 +431,7 @@ local function refreshObjs()
     for _, d in ipairs(workspace:GetDescendants()) do applyObj(d) end
 end
 
-table.insert(connections, workspace.DescendantAdded:Connect(function(d)
+track(workspace.DescendantAdded:Connect(function(d)
     if config.eyes or config.generator then
         task.defer(applyObj, d)
     end
@@ -435,7 +457,7 @@ local function restoreFog()
     if atmosphere and atmosphereDensity then atmosphere.Density = atmosphereDensity end
 end
 
-table.insert(connections, RunService.RenderStepped:Connect(function()
+track(RunService.RenderStepped:Connect(function()
     if config.fullbright then
         Lighting.Brightness = 2
         Lighting.ClockTime = 14
@@ -454,7 +476,7 @@ end))
 -- Update berkala (jarak player + batas jarak objek)
 ----------------------------------------------------------------
 local acc = 0
-table.insert(connections, RunService.Heartbeat:Connect(function(dt)
+track(RunService.Heartbeat:Connect(function(dt)
     acc += dt
     if acc < 0.25 then return end
     acc = 0
@@ -473,10 +495,10 @@ table.insert(connections, RunService.Heartbeat:Connect(function(dt)
     local maxD = config.distance
     for inst, d in pairs(objESP) do
         local visible = not d.done
-        if visible and maxD > 0 and rootPos then
+        if visible and maxD > 0 and rootPos and inst.Parent then
             visible = (inst:GetPivot().Position - rootPos).Magnitude <= maxD
         end
-        d.hl[d.vizProp] = visible
+        d.hl.Enabled = visible
         if d.bb then d.bb.Enabled = visible and config.genProgress end
     end
 end))
@@ -484,29 +506,31 @@ end))
 ----------------------------------------------------------------
 -- Fast Vault (percepat animasi vault pallet, lokal)
 ----------------------------------------------------------------
--- dari log: animasi vault window = "WalkingVaultAnimation"; game sendiri pakai speed 1.0 (slow) / 1.7 (medium)
--- kecepatan diatur di tab Main (config.vaultSpeed)
+-- Animasi vault window ("WalkingVaultAnimation") sengaja dikecualikan:
+-- jalurnya lewat NetMotion/anticheat game dan error kalau animasinya diubah.
 local VAULT_KEYWORDS = {"vault", "pallet"}
--- vault window (WalkingVaultAnimation) dikecualikan: jalurnya lewat NetMotion/anticheat game dan error kalau animasinya diubah
 local VAULT_EXCLUDE = {"walkingvault"}
 
-table.insert(connections, RunService.Heartbeat:Connect(function()
+local function nameHasAny(name, list)
+    for _, word in ipairs(list) do
+        if string.find(name, word, 1, true) then return true end
+    end
+    return false
+end
+
+track(RunService.Heartbeat:Connect(function()
     if not config.fastVault then return end
     local char = LocalPlayer.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     local animator = hum and hum:FindFirstChildOfClass("Animator")
     if not animator then return end
-    for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
-        local name = string.lower(track.Name)
-        local excluded = false
-        for _, ex in ipairs(VAULT_EXCLUDE) do
-            if string.find(name, ex, 1, true) then excluded = true break end
-        end
-        for _, kw in ipairs(VAULT_KEYWORDS) do
-            if not excluded and string.find(name, kw, 1, true) then
-                if track.Speed ~= config.vaultSpeed then track:AdjustSpeed(config.vaultSpeed) end
-                break
-            end
+
+    for _, t in ipairs(animator:GetPlayingAnimationTracks()) do
+        local name = string.lower(t.Name)
+        if not nameHasAny(name, VAULT_EXCLUDE)
+            and nameHasAny(name, VAULT_KEYWORDS)
+            and t.Speed ~= config.vaultSpeed then
+            t:AdjustSpeed(config.vaultSpeed)
         end
     end
 end))
@@ -514,10 +538,10 @@ end))
 ----------------------------------------------------------------
 -- Speed Karakter (angka tetap, aktif pas sprint, lokal)
 ----------------------------------------------------------------
--- Dari log: game pakai WalkSpeed 10 (jalan) dan 17 (sprint). Dicek tiap frame
--- (Stepped + Heartbeat) supaya nggak ketimpa script game. Aktif cuma pas sprint;
--- vault, knocked, hooked, carried tetap diatur game.
-local walk = {hum = nil, base = nil, ours = nil}
+-- Game pakai WalkSpeed 10 (jalan) dan 17 (sprint). Dicek tiap frame
+-- (Stepped + Heartbeat) supaya nggak ketimpa script game. Aktif cuma pas
+-- sprint; vault, knocked, hooked, carried tetap diatur game.
+local walk = {hum = nil, base = nil, ours = nil, disabled = false}
 local WALK_BLOCK_ATTRS = {"isvaulting", "Knocked", "IsHooked", "IsCarried"}
 local WALK_SPRINT_MIN = 15 -- cadangan kalau atribut Sprinting nggak kebaca
 
@@ -540,7 +564,7 @@ local function walkStep()
     end
     local sprinting = char:GetAttribute("Sprinting") == true or walk.base >= WALK_SPRINT_MIN
 
-    if config.walkOn and not blocked and sprinting and walk.base > 0 then
+    if config.walkOn and not walk.disabled and not blocked and sprinting and walk.base > 0 then
         walk.ours = config.walkSpeed
         if cur ~= walk.ours then hum.WalkSpeed = walk.ours end
     elseif walk.ours then
@@ -549,73 +573,19 @@ local function walkStep()
     end
 end
 
-local function applyWalk() walkStep() end
-
-local function restoreWalk()
-    config.walkOn = false
-    walkStep()
-end
-
-table.insert(connections, RunService.Stepped:Connect(walkStep))
-table.insert(connections, RunService.Heartbeat:Connect(walkStep))
+track(RunService.Stepped:Connect(walkStep))
+track(RunService.Heartbeat:Connect(walkStep))
 
 ----------------------------------------------------------------
--- Moonwalk (karakter menghadap kamera/layar, lokal)
+-- Anti-AFK
 ----------------------------------------------------------------
--- Toggle di menu = fitur tersedia. Tombol X = nyala/mati moonwalk-nya.
--- Tombol WASD tetap jalan normal; karakter cuma dihadapkan ke kamera,
--- jadi maju (W) kelihatan kayak jalan mundur.
-local MOON_KEY = Enum.KeyCode.X
-local MOON_BLOCK_ATTRS = {"isvaulting", "overridelookscript", "Knocked", "IsHooked", "IsCarried"}
-local moon = {active = false, hum = nil, autoRotate = nil}
-
-local function moonRelease()
-    local hum = moon.hum
-    if hum and hum.Parent and moon.autoRotate ~= nil then
-        hum.AutoRotate = moon.autoRotate
+track(LocalPlayer.Idled:Connect(function()
+    if not config.antiAfk then return end
+    local ok, vu = pcall(game.GetService, game, "VirtualUser")
+    if ok and vu then
+        vu:CaptureController()
+        vu:ClickButton2(Vector2.new())
     end
-    moon.hum, moon.autoRotate = nil, nil
-end
-
-local function moonStep()
-    local char = LocalPlayer.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-
-    if not (config.moonwalk and moon.active and hum and root) then
-        if moon.hum then moonRelease() end
-        return
-    end
-    for _, a in ipairs(MOON_BLOCK_ATTRS) do
-        if char:GetAttribute(a) == true then return end -- biar nggak ganggu vault/knocked
-    end
-
-    if moon.hum ~= hum then
-        moonRelease()
-        moon.hum, moon.autoRotate = hum, hum.AutoRotate
-    end
-    hum.AutoRotate = false
-
-    local cam = workspace.CurrentCamera
-    if not cam then return end
-    local pos = root.Position
-    local toCam = Vector3.new(cam.CFrame.Position.X - pos.X, 0, cam.CFrame.Position.Z - pos.Z)
-    if toCam.Magnitude < 0.05 then return end
-    root.CFrame = CFrame.new(pos, pos + toCam.Unit)
-end
-
-local function setMoonFeature(state)
-    if not state then
-        moon.active = false
-        moonRelease()
-    end
-end
-
-table.insert(connections, RunService.Stepped:Connect(moonStep))
-table.insert(connections, UIS.InputBegan:Connect(function(input, processed)
-    if processed or input.KeyCode ~= MOON_KEY or not config.moonwalk then return end
-    moon.active = not moon.active
-    notify("Moonwalk " .. (moon.active and "ON" or "OFF"))
 end))
 
 ----------------------------------------------------------------
@@ -638,11 +608,12 @@ local glow = make("UIStroke", {
 }, main)
 
 task.spawn(function()
+    local info = TweenInfo.new(1.2, Enum.EasingStyle.Sine)
     while gui.Parent do
-        TweenService:Create(glow, TweenInfo.new(1.2, Enum.EasingStyle.Sine), {Transparency = 0.7}):Play()
+        TweenService:Create(glow, info, {Transparency = 0.7}):Play()
         task.wait(1.2)
         if not gui.Parent then break end
-        TweenService:Create(glow, TweenInfo.new(1.2, Enum.EasingStyle.Sine), {Transparency = 0.1}):Play()
+        TweenService:Create(glow, info, {Transparency = 0.1}):Play()
         task.wait(1.2)
     end
 end)
@@ -667,38 +638,22 @@ make("UIListLayout", {
     Padding = UDim.new(0, 6),
 }, titleHolder)
 
-make("TextLabel", {
-    AutomaticSize = Enum.AutomaticSize.X,
-    Size = UDim2.new(0, 0, 1, 0),
-    BackgroundTransparency = 1,
-    Text = "VIOLENCE DISTRICT",
-    TextColor3 = Color3.new(1, 1, 1),
-    Font = Enum.Font.GothamBlack,
-    TextSize = 13,
-    LayoutOrder = 1,
-}, titleHolder)
+local function titleLabel(text, color, font, size, order)
+    make("TextLabel", {
+        AutomaticSize = Enum.AutomaticSize.X,
+        Size = UDim2.new(0, 0, 1, 0),
+        BackgroundTransparency = 1,
+        Text = text,
+        TextColor3 = color,
+        Font = font,
+        TextSize = size,
+        LayoutOrder = order,
+    }, titleHolder)
+end
 
-make("TextLabel", {
-    AutomaticSize = Enum.AutomaticSize.X,
-    Size = UDim2.new(0, 0, 1, 0),
-    BackgroundTransparency = 1,
-    Text = VERSION,
-    TextColor3 = Color3.fromRGB(200, 200, 200),
-    Font = Enum.Font.GothamBold,
-    TextSize = 10,
-    LayoutOrder = 2,
-}, titleHolder)
-
-make("TextLabel", {
-    AutomaticSize = Enum.AutomaticSize.X,
-    Size = UDim2.new(0, 0, 1, 0),
-    BackgroundTransparency = 1,
-    Text = "by jeysar",
-    TextColor3 = Color3.fromRGB(140, 140, 140),
-    Font = Enum.Font.Gotham,
-    TextSize = 8,
-    LayoutOrder = 3,
-}, titleHolder)
+titleLabel("VIOLENCE DISTRICT", Color3.new(1, 1, 1), Enum.Font.GothamBlack, 13, 1)
+titleLabel(VERSION, Color3.fromRGB(200, 200, 200), Enum.Font.GothamBold, 10, 2)
+titleLabel("by jeysar", Color3.fromRGB(140, 140, 140), Enum.Font.Gotham, 8, 3)
 
 local function makeTopBtn(text, xOffset)
     local b = make("TextButton", {
@@ -742,6 +697,28 @@ local pages = make("Frame", {
     Position = UDim2.new(0, 110, 0, 0),
     BackgroundTransparency = 1,
 }, body)
+
+-- Tombol melayang buat HP (RightShift nggak ada di mobile)
+local floatBtn
+if UIS.TouchEnabled then
+    floatBtn = make("TextButton", {
+        Name = "VD_Float",
+        Size = UDim2.new(0, 38, 0, 38),
+        Position = UDim2.new(0, 10, 0.5, -19),
+        BackgroundColor3 = Color3.fromRGB(20, 20, 20),
+        BackgroundTransparency = 0.15,
+        Text = "VD",
+        TextColor3 = Color3.new(1, 1, 1),
+        Font = Enum.Font.GothamBlack,
+        TextSize = 12,
+        AutoButtonColor = true,
+    }, gui)
+    corner(floatBtn, 19)
+    stroke(floatBtn, 0.4)
+    floatBtn.MouseButton1Click:Connect(function()
+        main.Visible = not main.Visible
+    end)
+end
 
 ----------------------------------------------------------------
 -- GUI: Komponen
@@ -826,13 +803,7 @@ local function createInfo(parent, text)
     }, parent)
 end
 
-local KNOB_OFF = UDim2.new(0, 3, 0.5, -7)
-local KNOB_ON = UDim2.new(1, -17, 0.5, -7)
-
--- key = nama field di `config`; onChange(state) dipanggil setelah config diubah
-local function createToggle(parent, text, key, onChange)
-    local state = config[key] == true
-
+local function createRow(parent)
     local row = make("Frame", {
         Size = UDim2.new(1, 0, 0, 32),
         BackgroundColor3 = Color3.fromRGB(20, 20, 20),
@@ -841,9 +812,12 @@ local function createToggle(parent, text, key, onChange)
     }, parent)
     corner(row, 8)
     stroke(row, 0.85)
+    return row
+end
 
+local function rowLabel(row, text, widthOffset)
     make("TextLabel", {
-        Size = UDim2.new(1, -70, 1, 0),
+        Size = UDim2.new(1, widthOffset, 1, 0),
         Position = UDim2.new(0, 12, 0, 0),
         BackgroundTransparency = 1,
         Text = text,
@@ -852,11 +826,24 @@ local function createToggle(parent, text, key, onChange)
         TextSize = 13,
         TextXAlignment = Enum.TextXAlignment.Left,
     }, row)
+end
+
+local KNOB_OFF = UDim2.new(0, 3, 0.5, -7)
+local KNOB_ON = UDim2.new(1, -17, 0.5, -7)
+local SW_ON = Color3.fromRGB(70, 70, 70)
+local SW_OFF = Color3.fromRGB(30, 30, 30)
+local KNOB_ON_COLOR = Color3.new(1, 1, 1)
+local KNOB_OFF_COLOR = Color3.fromRGB(120, 120, 120)
+
+-- key = nama field di `config`; onChange(state) dipanggil setelah config diubah
+local function createToggle(parent, text, key, onChange)
+    local row = createRow(parent)
+    rowLabel(row, text, -70)
 
     local sw = make("TextButton", {
         Size = UDim2.new(0, 44, 0, 20),
         Position = UDim2.new(1, -54, 0.5, -10),
-        BackgroundColor3 = state and Color3.fromRGB(70, 70, 70) or Color3.fromRGB(30, 30, 30),
+        BackgroundColor3 = SW_OFF,
         Text = "",
         AutoButtonColor = false,
     }, row)
@@ -865,29 +852,46 @@ local function createToggle(parent, text, key, onChange)
 
     local knob = make("Frame", {
         Size = UDim2.new(0, 14, 0, 14),
-        Position = state and KNOB_ON or KNOB_OFF,
-        BackgroundColor3 = state and Color3.new(1, 1, 1) or Color3.fromRGB(120, 120, 120),
+        Position = KNOB_OFF,
+        BackgroundColor3 = KNOB_OFF_COLOR,
         BorderSizePixel = 0,
     }, sw)
     corner(knob, 7)
 
-    sw.MouseButton1Click:Connect(function()
-        state = not state
-        config[key] = state
-        TweenService:Create(knob, TweenInfo.new(0.2), {
+    local function paint(state, animate)
+        local knobProps = {
             Position = state and KNOB_ON or KNOB_OFF,
-            BackgroundColor3 = state and Color3.new(1, 1, 1) or Color3.fromRGB(120, 120, 120),
-        }):Play()
-        TweenService:Create(sw, TweenInfo.new(0.2), {
-            BackgroundColor3 = state and Color3.fromRGB(70, 70, 70) or Color3.fromRGB(30, 30, 30),
-        }):Play()
+            BackgroundColor3 = state and KNOB_ON_COLOR or KNOB_OFF_COLOR,
+        }
+        local swProps = {BackgroundColor3 = state and SW_ON or SW_OFF}
+        if animate then
+            TweenService:Create(knob, TweenInfo.new(0.2), knobProps):Play()
+            TweenService:Create(sw, TweenInfo.new(0.2), swProps):Play()
+        else
+            for k, v in pairs(knobProps) do knob[k] = v end
+            for k, v in pairs(swProps) do sw[k] = v end
+        end
+    end
+
+    paint(config[key] == true, false)
+
+    sw.MouseButton1Click:Connect(function()
+        local state = not config[key]
+        config[key] = state
+        paint(state, true)
         saveConfig()
         notify(text .. (state and " ON" or " OFF"))
         if onChange then onChange(state) end
     end)
 
+    -- dipanggil saat Reset Config
+    syncers[key] = function()
+        paint(config[key] == true, true)
+        if onChange then onChange(config[key]) end
+    end
+
     -- terapkan state tersimpan saat load
-    if state and onChange then task.defer(onChange, true) end
+    if config[key] == true and onChange then task.defer(onChange, true) end
 end
 
 local function createButton(parent, text, callback)
@@ -907,29 +911,25 @@ local function createButton(parent, text, callback)
     return b
 end
 
+-- tombol yang muter antar preset; labelFn() = teks dari nilai config saat ini
+local function createCycle(parent, key, presets, labelFn)
+    local btn = createButton(parent, labelFn(), function(b)
+        local idx = table.find(presets, config[key]) or 0
+        config[key] = presets[idx % #presets + 1]
+        b.Text = labelFn()
+        saveConfig()
+        notify(labelFn())
+    end)
+    syncers[key] = function() btn.Text = labelFn() end
+    return btn
+end
+
 local function fmtNum(v) return string.format("%g", math.floor(v * 100 + 0.5) / 100) end
 
 -- input angka: key = field di `config`, dibatasi minV..maxV
 local function createInput(parent, text, key, minV, maxV, onChange)
-    local row = make("Frame", {
-        Size = UDim2.new(1, 0, 0, 32),
-        BackgroundColor3 = Color3.fromRGB(20, 20, 20),
-        BorderSizePixel = 0,
-        LayoutOrder = nextOrder(parent),
-    }, parent)
-    corner(row, 8)
-    stroke(row, 0.85)
-
-    make("TextLabel", {
-        Size = UDim2.new(1, -90, 1, 0),
-        Position = UDim2.new(0, 12, 0, 0),
-        BackgroundTransparency = 1,
-        Text = text,
-        TextColor3 = Color3.new(1, 1, 1),
-        Font = Enum.Font.GothamMedium,
-        TextSize = 13,
-        TextXAlignment = Enum.TextXAlignment.Left,
-    }, row)
+    local row = createRow(parent)
+    rowLabel(row, text, -90)
 
     local box = make("TextBox", {
         Size = UDim2.new(0, 60, 0, 22),
@@ -954,6 +954,32 @@ local function createInput(parent, text, key, minV, maxV, onChange)
         end
         box.Text = fmtNum(config[key])
     end)
+
+    syncers[key] = function()
+        box.Text = fmtNum(config[key])
+        if onChange then onChange(config[key]) end
+    end
+end
+
+----------------------------------------------------------------
+-- Unload
+----------------------------------------------------------------
+local function unload()
+    for plr in pairs(espData) do removeESP(plr) end
+    for inst in pairs(objESP) do removeObj(inst) end
+    restoreKeys(FB_KEYS)
+    restoreFog()
+
+    walk.disabled = true
+    walkStep() -- kembalikan WalkSpeed bawaan game
+
+    for _, conns in pairs(playerConns) do disconnectAll(conns) end
+    table.clear(playerConns)
+    disconnectAll(connections)
+
+    if env.VD_Unload == unload then env.VD_Unload = nil end
+    gui:Destroy()
+    print("[Violence District " .. VERSION .. "] Unloaded")
 end
 
 ----------------------------------------------------------------
@@ -963,26 +989,15 @@ end
 local mainPage = createTab("Main")
 createSection(mainPage, "Gerakan")
 createToggle(mainPage, "Fast Vault (Pallet)", "fastVault")
-
-local function vaultSpeedText()
+createCycle(mainPage, "vaultSpeed", VAULT_PRESETS, function()
     return "Speed Vault: " .. string.format("%.1f", config.vaultSpeed) .. "x"
-end
-
-createButton(mainPage, vaultSpeedText(), function(btn)
-    local idx = table.find(VAULT_PRESETS, config.vaultSpeed) or 0
-    idx = idx % #VAULT_PRESETS + 1
-    config.vaultSpeed = VAULT_PRESETS[idx]
-    btn.Text = vaultSpeedText()
-    saveConfig()
-    notify(vaultSpeedText())
 end)
 createInfo(mainPage, "Mempercepat animasi vault pallet (lokal). Vault window sengaja nggak diubah. Makin tinggi makin besar risiko kena anticheat.")
+
 createSection(mainPage, "Karakter")
-createToggle(mainPage, "Speed Karakter", "walkOn", applyWalk)
-createInput(mainPage, "Speed Sprint", "walkSpeed", 10, 30, applyWalk)
+createToggle(mainPage, "Speed Karakter", "walkOn", walkStep)
+createInput(mainPage, "Speed Sprint", "walkSpeed", 10, 30, walkStep)
 createInfo(mainPage, "Ketik angka lalu Enter (10 - 30), misal 18. Aktif cuma pas sprint; speed bawaan game sprint = 17. Jalan, vault, knocked, hooked, dan carried tetap diatur game. Makin tinggi makin gampang kena anticheat, saran 18 - 20.")
-createToggle(mainPage, "Moonwalk (tekan X)", "moonwalk", setMoonFeature)
-createInfo(mainPage, "Nyalakan toggle dulu, lalu tekan X di game buat on/off moonwalk. Karakter dihadapkan ke kamera; WASD tetap normal. Nggak aktif pas vault/knocked/hooked/carried.")
 
 -- Tab: ESP
 local espPage = createTab("ESP")
@@ -992,8 +1007,8 @@ createToggle(espPage, "Nama & Jarak", "name", refreshAll)
 createSection(espPage, "Objek")
 createToggle(espPage, "Eyes of Heaven", "eyes", refreshObjs)
 createToggle(espPage, "Generator", "generator", refreshObjs)
-createToggle(espPage, "Progress Gen (%)", "genProgress", refreshGenColors)
-createInfo(espPage, "Putih = Survivor | Merah = Killer\nEyes of Heaven: pallet (kuning), gaya perk tapi lokal.\nGenerator: ungu + bar progress % (kuning), hilang kalau sudah beres.")
+createToggle(espPage, "Progress Gen (%)", "genProgress", refreshGenAll)
+createInfo(espPage, "Putih = Survivor | Merah = Killer\nEyes of Heaven: pallet (kuning), gaya perk tapi lokal.\nGenerator: ungu + bar progress % (merah > kuning > hijau), hilang kalau sudah beres.")
 
 -- Tab: Visual
 local visualPage = createTab("Visual")
@@ -1007,26 +1022,27 @@ end)
 
 -- Tab: Settings
 local settingsPage = createTab("Settings")
+createSection(settingsPage, "Umum")
+createToggle(settingsPage, "Anti-AFK", "antiAfk")
+createToggle(settingsPage, "Notifikasi", "notifications")
+
 createSection(settingsPage, "ESP Objek")
-
-local function distanceText()
+createCycle(settingsPage, "distance", DISTANCE_PRESETS, function()
     return "Jarak Objek: " .. (config.distance == 0 and "Tanpa batas" or (config.distance .. " stud"))
-end
-
-createButton(settingsPage, distanceText(), function(btn)
-    local idx = table.find(DISTANCE_PRESETS, config.distance) or 0
-    idx = idx % #DISTANCE_PRESETS + 1
-    config.distance = DISTANCE_PRESETS[idx]
-    btn.Text = distanceText()
-    saveConfig()
-    notify(distanceText())
 end)
 
 createSection(settingsPage, "Config")
 createButton(settingsPage, "Simpan Config", function()
-    notify(saveConfig() and "Config tersimpan" or "Executor tidak support writefile")
+    notify(saveConfig() and "Config tersimpan" or "Executor tidak support writefile", true)
 end)
-createInfo(settingsPage, "Toggle otomatis tersimpan.\nRightShift = show/hide panel (PC)\nBatas jarak membantu menghindari limit Highlight Roblox (~31).")
+createButton(settingsPage, "Reset Config", function()
+    for k, v in pairs(DEFAULTS) do config[k] = v end
+    for _, sync in pairs(syncers) do sync() end
+    saveConfig()
+    notify("Config direset ke default", true)
+end)
+createButton(settingsPage, "Unload Script", unload)
+createInfo(settingsPage, "Toggle otomatis tersimpan.\nRightShift = show/hide panel (PC), tombol VD = show/hide (HP).\nBatas jarak membantu menghindari limit Highlight Roblox (~31).")
 
 selectTab("Main")
 
@@ -1037,31 +1053,15 @@ minBtn.MouseButton1Click:Connect(function()
     minimized = not minimized
     body.Visible = not minimized
     TweenService:Create(main, TweenInfo.new(0.25, Enum.EasingStyle.Quad), {
-        Size = minimized and MINI_SIZE or FULL_SIZE
+        Size = minimized and MINI_SIZE or FULL_SIZE,
     }):Play()
     minBtn.Text = minimized and "+" or "–"
 end)
 
-local function unload()
-    for plr in pairs(espData) do removeESP(plr) end
-    for inst in pairs(objESP) do removeObj(inst) end
-    restoreKeys(FB_KEYS)
-    restoreFog()
-    restoreWalk()
-    moon.active = false
-    moonRelease()
-    for _, conns in pairs(playerConns) do
-        for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
-    end
-    table.clear(playerConns)
-    for _, c in ipairs(connections) do pcall(function() c:Disconnect() end) end
-    table.clear(connections)
-    gui:Destroy()
-end
-
 closeBtn.MouseButton1Click:Connect(unload)
+env.VD_Unload = unload
 
-table.insert(connections, UIS.InputBegan:Connect(function(input, processed)
+track(UIS.InputBegan:Connect(function(input, processed)
     if processed then return end
     if input.KeyCode == TOGGLE_KEY then
         main.Visible = not main.Visible
@@ -1070,23 +1070,29 @@ end))
 
 local dragging, dragStart, startPos
 top.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
         dragging = true
         dragStart = input.Position
         startPos = main.Position
     end
 end)
-table.insert(connections, UIS.InputChanged:Connect(function(input)
-    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+track(UIS.InputChanged:Connect(function(input)
+    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+        or input.UserInputType == Enum.UserInputType.Touch) then
         local delta = input.Position - dragStart
-        main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        main.Position = UDim2.new(
+            startPos.X.Scale, startPos.X.Offset + delta.X,
+            startPos.Y.Scale, startPos.Y.Offset + delta.Y
+        )
     end
 end))
-table.insert(connections, UIS.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+track(UIS.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
         dragging = false
     end
 end))
 
 print("[Violence District " .. VERSION .. "] Loaded - made by jeysar")
-notify("Loaded - made by jeysar")
+notify("Loaded " .. VERSION .. " - made by jeysar", true)
