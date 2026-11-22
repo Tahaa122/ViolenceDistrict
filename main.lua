@@ -3,6 +3,8 @@
 
 local VERSION = "v1.3"
 
+print("[Violence District " .. VERSION .. "] Loading...")
+
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
@@ -486,7 +488,6 @@ end))
 local VAULT_KEYWORDS = {"vault", "pallet"}
 -- vault window (WalkingVaultAnimation) dikecualikan: jalurnya lewat NetMotion/anticheat game dan error kalau animasinya diubah
 local VAULT_EXCLUDE = {"walkingvault"}
-local seenTracks = {}
 
 table.insert(connections, RunService.Heartbeat:Connect(function()
     if not config.fastVault then return end
@@ -496,10 +497,6 @@ table.insert(connections, RunService.Heartbeat:Connect(function()
     if not animator then return end
     for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
         local name = string.lower(track.Name)
-        if not seenTracks[name] then
-            seenTracks[name] = true
-            print("[VD] animasi terdeteksi:", track.Name) -- cek di F9 buat nyari nama animasi pallet
-        end
         local excluded = false
         for _, ex in ipairs(VAULT_EXCLUDE) do
             if string.find(name, ex, 1, true) then excluded = true break end
@@ -516,62 +513,50 @@ end))
 ----------------------------------------------------------------
 -- Speed Karakter (angka tetap, aktif pas sprint, lokal)
 ----------------------------------------------------------------
--- Dari log: game pakai WalkSpeed 10 (jalan) dan 17 (sprint). Angka di menu
--- dipakai cuma saat Sprinting = true; selain itu (jalan, vault, knocked,
--- hooked, carried) speed tetap diatur game.
-local walk = {hum = nil, base = nil, ours = nil, conns = {}}
+-- Dari log: game pakai WalkSpeed 10 (jalan) dan 17 (sprint). Dicek tiap frame
+-- (Stepped + Heartbeat) supaya nggak ketimpa script game. Aktif cuma pas sprint;
+-- vault, knocked, hooked, carried tetap diatur game.
+local walk = {hum = nil, base = nil, ours = nil}
 local WALK_BLOCK_ATTRS = {"isvaulting", "Knocked", "IsHooked", "IsCarried"}
+local WALK_SPRINT_MIN = 15 -- cadangan kalau atribut Sprinting nggak kebaca
 
-local function applyWalk()
-    local hum = walk.hum
-    if not (hum and hum.Parent) then return end
-    local char = hum.Parent
-    for _, a in ipairs(WALK_BLOCK_ATTRS) do
-        if char:GetAttribute(a) == true then
-            if walk.ours then walk.ours = nil end
-            return
-        end
+local function walkStep()
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    if hum ~= walk.hum then
+        walk.hum, walk.base, walk.ours = hum, hum.WalkSpeed, nil
     end
-    local want = config.walkOn and char:GetAttribute("Sprinting") == true
-        and walk.base and walk.base > 0
-    if want then
+
+    local cur = hum.WalkSpeed
+    if not (walk.ours and math.abs(cur - walk.ours) < 1e-4) then
+        walk.base = cur -- nilai terbaru dari game
+    end
+
+    local blocked = false
+    for _, a in ipairs(WALK_BLOCK_ATTRS) do
+        if char:GetAttribute(a) == true then blocked = true break end
+    end
+    local sprinting = char:GetAttribute("Sprinting") == true or walk.base >= WALK_SPRINT_MIN
+
+    if config.walkOn and not blocked and sprinting and walk.base > 0 then
         walk.ours = config.walkSpeed
-        hum.WalkSpeed = walk.ours
+        if cur ~= walk.ours then hum.WalkSpeed = walk.ours end
     elseif walk.ours then
         walk.ours = nil
-        if walk.base then hum.WalkSpeed = walk.base end
+        hum.WalkSpeed = walk.base
     end
 end
 
-local function unhookWalk()
-    for _, c in ipairs(walk.conns) do pcall(function() c:Disconnect() end) end
-    table.clear(walk.conns)
-end
-
-local function hookWalk(char)
-    unhookWalk()
-    local hum = char:WaitForChild("Humanoid", 10)
-    if not hum then return end
-    walk.hum, walk.base, walk.ours = hum, hum.WalkSpeed, nil
-    table.insert(walk.conns, hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
-        if walk.ours and math.abs(hum.WalkSpeed - walk.ours) < 1e-4 then return end
-        walk.base = hum.WalkSpeed -- nilai baru dari game
-        applyWalk()
-    end))
-    for _, a in ipairs({"Sprinting", table.unpack(WALK_BLOCK_ATTRS)}) do
-        table.insert(walk.conns, char:GetAttributeChangedSignal(a):Connect(applyWalk))
-    end
-    applyWalk()
-end
+local function applyWalk() walkStep() end
 
 local function restoreWalk()
     config.walkOn = false
-    applyWalk()
-    unhookWalk()
+    walkStep()
 end
 
-table.insert(connections, LocalPlayer.CharacterAdded:Connect(function(c) task.spawn(hookWalk, c) end))
-if LocalPlayer.Character then task.spawn(hookWalk, LocalPlayer.Character) end
+table.insert(connections, RunService.Stepped:Connect(walkStep))
+table.insert(connections, RunService.Heartbeat:Connect(walkStep))
 
 ----------------------------------------------------------------
 -- GUI: Window
@@ -1038,3 +1023,6 @@ table.insert(connections, UIS.InputEnded:Connect(function(input)
         dragging = false
     end
 end))
+
+print("[Violence District " .. VERSION .. "] Loaded - made by jeysar")
+notify("Loaded - made by jeysar")
