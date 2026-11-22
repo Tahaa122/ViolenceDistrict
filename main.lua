@@ -21,7 +21,6 @@ local COLOR_SURVIVOR = Color3.fromRGB(255, 255, 255)
 local COLOR_KILLER = Color3.fromRGB(255, 50, 50)
 local COLOR_PALLET = Color3.fromRGB(255, 200, 0)
 local COLOR_GENERATOR = Color3.fromRGB(170, 70, 255) -- ungu
-local COLOR_WINDOW = Color3.fromRGB(255, 200, 0) -- kuning (sama kayak pallet)
 local TOGGLE_KEY = Enum.KeyCode.RightShift
 local FULL_SIZE = UDim2.new(0, 440, 0, 290)
 local MINI_SIZE = UDim2.new(0, 440, 0, 34)
@@ -35,6 +34,7 @@ local config = {
     generator = false,
     genProgress = true,
     fullbright = false,
+    fastVault = false,
     nofog = false,
     distance = 150,
 }
@@ -258,7 +258,7 @@ local function progressColor(progress)
     return yellow:Lerp(green, (t - 0.5) * 2)
 end
 
-local OBJ_COLORS = {pallet = COLOR_PALLET, window = COLOR_WINDOW, generator = COLOR_GENERATOR}
+local OBJ_COLORS = {pallet = COLOR_PALLET, generator = COLOR_GENERATOR}
 
 -- Filter berdasarkan struktur map (dari data perk):
 --   Pallet asli  : Workspace.Map.pallets.<Newpallet>
@@ -275,9 +275,6 @@ local function getKind(inst)
     local parentName = string.lower(parent.Name)
     if (inst:IsA("Model") or inst:IsA("BasePart")) and parentName == "pallets" then
         return "pallet"
-    end
-    if inst:IsA("BasePart") and parentName == "window" then
-        return "window"
     end
     return nil
 end
@@ -318,7 +315,7 @@ local function applyObj(inst)
     if objESP[inst] then return end
     local kind = getKind(inst)
     if not kind then return end
-    if ((kind == "pallet" or kind == "window") and not config.eyes)
+    if (kind == "pallet" and not config.eyes)
         or (kind == "generator" and not config.generator) then
         return
     end
@@ -332,42 +329,7 @@ local function applyObj(inst)
 
     local color = OBJ_COLORS[kind]
     local hl, vizProp
-    if kind == "window" then
-        -- Wireframe: 12 garis tepi (BoxHandleAdornment tipis), tanpa isi, tembus tembok
-        local edges = {}
-        local sz = inst.Size
-        local t = 0.15
-        for ax = 1, 3 do
-            for _, sa in ipairs({-1, 1}) do
-                for _, sb in ipairs({-1, 1}) do
-                    local size, off
-                    if ax == 1 then
-                        size = Vector3.new(sz.X, t, t); off = Vector3.new(0, sa * sz.Y / 2, sb * sz.Z / 2)
-                    elseif ax == 2 then
-                        size = Vector3.new(t, sz.Y, t); off = Vector3.new(sa * sz.X / 2, 0, sb * sz.Z / 2)
-                    else
-                        size = Vector3.new(t, t, sz.Z); off = Vector3.new(sa * sz.X / 2, sb * sz.Y / 2, 0)
-                    end
-                    table.insert(edges, make("BoxHandleAdornment", {
-                        Name = "VD_Obj",
-                        Adornee = inst,
-                        Size = size,
-                        CFrame = CFrame.new(off),
-                        Color3 = color,
-                        Transparency = 0,
-                        AlwaysOnTop = true,
-                        ZIndex = 5,
-                    }, gui))
-                end
-            end
-        end
-        hl = setmetatable({
-            Destroy = function() for _, e in ipairs(edges) do e:Destroy() end end,
-        }, {__newindex = function(_, k, v)
-            if k == "Visible" then for _, e in ipairs(edges) do e.Visible = v end end
-        end})
-        vizProp = "Visible"
-    else
+    do
         hl = make("Highlight", {
             Name = "VD_Obj",
             FillColor = color,
@@ -509,6 +471,35 @@ table.insert(connections, RunService.Heartbeat:Connect(function(dt)
         end
         d.hl[d.vizProp] = visible
         if d.bb then d.bb.Enabled = visible and config.genProgress end
+    end
+end))
+
+----------------------------------------------------------------
+-- Fast Vault (percepat animasi vault window, lokal)
+----------------------------------------------------------------
+-- dari log: animasi vault = "WalkingVaultAnimation", game sendiri pakai speed 1.0 (slow) / 1.7 (medium)
+local VAULT_SPEED = 2.0
+local VAULT_KEYWORDS = {"vaultanimation"}
+local seenTracks = {}
+
+table.insert(connections, RunService.Heartbeat:Connect(function()
+    if not config.fastVault then return end
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local animator = hum and hum:FindFirstChildOfClass("Animator")
+    if not animator then return end
+    for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+        local name = string.lower(track.Name)
+        if not seenTracks[name] then
+            seenTracks[name] = true
+            print("[VD] animasi terdeteksi:", track.Name) -- cek di F9 buat nyari nama animasi vault
+        end
+        for _, kw in ipairs(VAULT_KEYWORDS) do
+            if string.find(name, kw, 1, true) then
+                if track.Speed ~= VAULT_SPEED then track:AdjustSpeed(VAULT_SPEED) end
+                break
+            end
+        end
     end
 end))
 
@@ -813,7 +804,7 @@ createSection(espPage, "Objek")
 createToggle(espPage, "Eyes of Heaven", "eyes", refreshObjs)
 createToggle(espPage, "Generator", "generator", refreshObjs)
 createToggle(espPage, "Progress Gen (%)", "genProgress", refreshGenColors)
-createInfo(espPage, "Putih = Survivor | Merah = Killer\nEyes of Heaven: pallet (kuning) + window (kuning, outline), gaya perk tapi lokal.\nGenerator: ungu + bar progress % (kuning), hilang kalau sudah beres.")
+createInfo(espPage, "Putih = Survivor | Merah = Killer\nEyes of Heaven: pallet (kuning), gaya perk tapi lokal.\nGenerator: ungu + bar progress % (kuning), hilang kalau sudah beres.")
 
 -- Tab: Visual
 local visualPage = createTab("Visual")
@@ -824,6 +815,9 @@ end)
 createToggle(visualPage, "No Fog", "nofog", function(s)
     if not s then restoreFog() end
 end)
+createSection(visualPage, "Gerakan")
+createToggle(visualPage, "Fast Vault Window", "fastVault")
+createInfo(visualPage, "Mempercepat animasi vault window (lokal). Kalau nggak ngaruh, cek nama animasi di F9 console.")
 
 -- Tab: Settings
 local settingsPage = createTab("Settings")
