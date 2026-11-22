@@ -1,7 +1,7 @@
 -- Violence District | Menu v1.2 by jeysar
 -- Tab: ESP, Visual, Settings
 
-local VERSION = "v1.2"
+local VERSION = "v1.3"
 
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
@@ -20,8 +20,8 @@ local LocalPlayer = Players.LocalPlayer
 local COLOR_SURVIVOR = Color3.fromRGB(255, 255, 255)
 local COLOR_KILLER = Color3.fromRGB(255, 50, 50)
 local COLOR_PALLET = Color3.fromRGB(255, 200, 0)
-local COLOR_GENERATOR = Color3.fromRGB(80, 255, 120)
-local COLOR_WINDOW = Color3.fromRGB(0, 170, 255)
+local COLOR_GENERATOR = Color3.fromRGB(170, 70, 255) -- ungu
+local COLOR_WINDOW = Color3.fromRGB(255, 200, 0) -- kuning (sama kayak pallet)
 local TOGGLE_KEY = Enum.KeyCode.RightShift
 local FULL_SIZE = UDim2.new(0, 440, 0, 290)
 local MINI_SIZE = UDim2.new(0, 440, 0, 34)
@@ -287,17 +287,25 @@ local function removeObj(inst)
     if d then
         for _, c in ipairs(d.conns) do pcall(function() c:Disconnect() end) end
         if d.hl then d.hl:Destroy() end
+        if d.bb then d.bb:Destroy() end
         objESP[inst] = nil
     end
 end
 
 local function refreshGen(inst, d)
-    local progress = inst:GetAttribute("RepairProgress") or 0
+    local progress = math.clamp(inst:GetAttribute("RepairProgress") or 0, 0, 100)
     d.done = inst:GetAttribute("Completed") == true or progress >= 100
-    local color = config.genProgress and progressColor(progress) or COLOR_GENERATOR
-    d.hl.FillColor = color
-    d.hl.OutlineColor = color
+    d.hl.FillColor = COLOR_GENERATOR
+    d.hl.OutlineColor = COLOR_GENERATOR
     if d.done then d.hl.Enabled = false end
+
+    if d.bb then
+        d.bb.Enabled = config.genProgress and not d.done
+        d.label.Text = math.floor(progress + 0.5) .. "%"
+        TweenService:Create(d.fill, TweenInfo.new(0.25), {
+            Size = UDim2.new(progress / 100, 0, 1, 0),
+        }):Play()
+    end
 end
 
 local function refreshGenColors()
@@ -325,15 +333,14 @@ local function applyObj(inst)
     local color = OBJ_COLORS[kind]
     local hl, vizProp
     if kind == "window" then
-        -- BoxHandleAdornment (mirip visual perk); Highlight di part window tipis nggak kelihatan
-        hl = make("BoxHandleAdornment", {
+        -- SelectionBox: cuma garis pinggir (outline), tanpa isi, jadi nggak nutupin layar
+        hl = make("SelectionBox", {
             Name = "VD_Obj",
             Adornee = inst,
-            Size = inst.Size,
             Color3 = color,
-            Transparency = 0.55,
-            AlwaysOnTop = true,
-            ZIndex = 5,
+            LineThickness = 0.025,
+            SurfaceTransparency = 1,
+            Transparency = 0,
         }, gui)
         vizProp = "Visible"
     else
@@ -351,6 +358,42 @@ local function applyObj(inst)
 
     local d = {hl = hl, vizProp = vizProp, kind = kind, conns = {}, done = false}
     objESP[inst] = d
+
+    if kind == "generator" then
+        local anchor = (inst:IsA("Model") and (inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true))) or inst
+        d.bb = make("BillboardGui", {
+            Name = "VD_GenProgress",
+            Size = UDim2.new(0, 90, 0, 24),
+            StudsOffset = Vector3.new(0, 4, 0),
+            AlwaysOnTop = true,
+            Adornee = anchor,
+        }, gui)
+        local bg = make("Frame", {
+            Size = UDim2.new(1, 0, 0, 10),
+            Position = UDim2.new(0, 0, 0, 12),
+            BackgroundColor3 = Color3.fromRGB(20, 20, 20),
+            BackgroundTransparency = 0.2,
+            BorderSizePixel = 0,
+        }, d.bb)
+        corner(bg, 4)
+        stroke(bg, 0.3, COLOR_GENERATOR)
+        d.fill = make("Frame", {
+            Size = UDim2.new(0, 0, 1, 0),
+            BackgroundColor3 = COLOR_GENERATOR,
+            BorderSizePixel = 0,
+        }, bg)
+        corner(d.fill, 4)
+        d.label = make("TextLabel", {
+            Size = UDim2.new(1, 0, 0, 12),
+            BackgroundTransparency = 1,
+            Text = "0%",
+            TextColor3 = Color3.new(1, 1, 1),
+            TextStrokeColor3 = Color3.new(0, 0, 0),
+            TextStrokeTransparency = 0.3,
+            Font = Enum.Font.GothamBold,
+            TextSize = 12,
+        }, d.bb)
+    end
 
     table.insert(d.conns, inst.AncestryChanged:Connect(function()
         if not inst:IsDescendantOf(workspace) then removeObj(inst) end
@@ -441,6 +484,7 @@ table.insert(connections, RunService.Heartbeat:Connect(function(dt)
             visible = (inst:GetPivot().Position - rootPos).Magnitude <= maxD
         end
         d.hl[d.vizProp] = visible
+        if d.bb then d.bb.Enabled = visible and config.genProgress end
     end
 end))
 
@@ -744,8 +788,8 @@ createToggle(espPage, "Nama & Jarak", "name", refreshAll)
 createSection(espPage, "Objek")
 createToggle(espPage, "Eyes of Heaven", "eyes", refreshObjs)
 createToggle(espPage, "Generator", "generator", refreshObjs)
-createToggle(espPage, "Warna Progress Gen", "genProgress", refreshGenColors)
-createInfo(espPage, "Putih = Survivor | Merah = Killer\nEyes of Heaven: pallet (kuning) + window (biru), gaya perk tapi lokal.\nGenerator: merah (baru) > kuning > hijau (hampir selesai), hilang kalau sudah beres.")
+createToggle(espPage, "Progress Gen (%)", "genProgress", refreshGenColors)
+createInfo(espPage, "Putih = Survivor | Merah = Killer\nEyes of Heaven: pallet (kuning) + window (kuning, outline), gaya perk tapi lokal.\nGenerator: ungu + bar progress %, hilang kalau sudah beres.")
 
 -- Tab: Visual
 local visualPage = createTab("Visual")
