@@ -629,12 +629,16 @@ end))
 ----------------------------------------------------------------
 -- Auto Perfect Skill Check
 ----------------------------------------------------------------
--- Dari log game: Line.Rotation di 102..116 derajat di atas Goal.Rotation
--- = PERFECT, 116..159 = good (script game: Skillcheck-gen). Jarum jalan
--- sekitar 280 derajat/detik, jadi zona perfect cuma ~50 ms. Kita prediksi
--- posisi jarum di frame berikutnya, lalu tekan tombol skill check lewat
--- input virtual (jalurnya sama kayak pencet beneran: UserInputService).
-local PERFECT_MIN, PERFECT_MAX, PERFECT_AIM = 102, 116, 109
+-- Zona PERFECT = Line ada di 104..114 derajat di depan Goal. Selisihnya
+-- dihitung modulo 360 (logika sama kayak script asli game), jadi aman
+-- walaupun Rotation udah muter lewat 360 / negatif.
+-- Jarum jalan sekitar 280 derajat/detik, zona perfect cuma ~35 ms, makanya
+-- posisi jarum diprediksi 1 frame ke depan (input virtual baru diproses
+-- di frame berikutnya). Tiap skill check cuma ditekan SEKALI.
+local PERFECT_MIN, PERFECT_MAX, PERFECT_AIM = 104, 114, 109
+local HOLD_TIME = 0.01      -- lama tombol ditahan
+local LEAD_FRAMES = 1       -- prediksi berapa frame ke depan (naikin kalau telat)
+local MAX_LEAD = 12         -- batas prediksi (derajat) biar nggak kejauhan pas lag
 local SKILL_GUIS = {"SkillCheckPromptGui", "SkillCheckPromptGui-con"}
 local VIM = game:GetService("VirtualInputManager")
 local KeybindsModule
@@ -643,7 +647,7 @@ pcall(function()
         .Modules.Survivors.KeybindsConfig)
 end)
 
-local autoState = {lastRot = nil, lastT = nil, pressed = false, warned = false}
+local autoState = {lastDiff = nil, lastT = nil, goalRot = nil, pressed = false, warned = false}
 
 local function findSkillCheck()
     local pg = LocalPlayer:FindFirstChild("PlayerGui")
@@ -667,54 +671,65 @@ local function pressSkillKey()
             local btn = raw == "MouseButton1" and 0 or 1
             local c = workspace.CurrentCamera.ViewportSize / 2
             VIM:SendMouseButtonEvent(c.X, c.Y, btn, true, game, 0)
-            VIM:SendMouseButtonEvent(c.X, c.Y, btn, false, game, 0)
+            task.delay(HOLD_TIME, function()
+                VIM:SendMouseButtonEvent(c.X, c.Y, btn, false, game, 0)
+            end)
         else
             local key = Enum.KeyCode[raw]
             VIM:SendKeyEvent(true, key, false, game)
-            task.delay(0.03, function() VIM:SendKeyEvent(false, key, false, game) end)
+            task.delay(HOLD_TIME, function() VIM:SendKeyEvent(false, key, false, game) end)
         end
     end)
 end
 
 local function resetAuto()
-    autoState.lastRot, autoState.lastT, autoState.pressed = nil, nil, false
+    autoState.lastDiff, autoState.lastT, autoState.goalRot, autoState.pressed = nil, nil, nil, false
 end
 
-track(RunService.RenderStepped:Connect(function()
+-- Heartbeat (sama kayak script asli): jalan setelah game selesai update Line
+track(RunService.Heartbeat:Connect(function()
     if not config.autoPerfect then return resetAuto() end
     local check = findSkillCheck()
     if not check then return resetAuto() end
 
     -- varian trap punya zona sendiri; jangan disentuh
     local trap = check:FindFirstChild("TrapGoal")
-    if trap and trap.Visible then return end
+    if trap and trap.Visible then return resetAuto() end
 
     local line, goal = check:FindFirstChild("Line"), check:FindFirstChild("Goal")
     if not (line and goal) then return end
 
-    local now, rot = os.clock(), line.Rotation
-    local last = autoState.lastRot
-    if last and rot < last - 10 then autoState.pressed = false end -- skill check baru
+    local now = os.clock()
+    local diff = (line.Rotation - goal.Rotation) % 360
+    local last = autoState.lastDiff
+
+    -- skill check baru: Goal pindah, atau jarum muter balik ke awal
+    if autoState.goalRot and math.abs(goal.Rotation - autoState.goalRot) > 0.01 then
+        autoState.pressed = false
+    end
+    if last and diff < last - 180 then autoState.pressed = false end
+    autoState.goalRot = goal.Rotation
 
     if last and not autoState.pressed then
         local dt = now - autoState.lastT
-        local speed = dt > 0 and (rot - last) / dt or 0
-        local zoneStart = goal.Rotation + PERFECT_MIN
-        local zoneEnd = goal.Rotation + PERFECT_MAX
-        local target = goal.Rotation + PERFECT_AIM
+        local step = (diff - last) % 360
+        if step > 180 then step -= 360 end -- negatif = jarum mundur
+        local speed = dt > 0 and step / dt or 0
 
-        if rot > zoneEnd then
-            autoState.pressed = true -- udah kelewat, jangan dipencet
-        elseif speed > 0 and rot >= zoneStart - speed * dt
-            and rot + speed * dt >= target then
-            autoState.pressed = true
-            if not pressSkillKey() and not autoState.warned then
-                autoState.warned = true
-                notify("Auto Perfect: input virtual nggak didukung executor", true)
+        if speed > 0 then
+            local lead = math.min(speed * dt * LEAD_FRAMES, MAX_LEAD)
+            if diff <= PERFECT_MAX and diff + lead >= PERFECT_AIM then
+                autoState.pressed = true
+                if not pressSkillKey() and not autoState.warned then
+                    autoState.warned = true
+                    notify("Auto Perfect: input virtual nggak didukung executor", true)
+                end
+            elseif diff > PERFECT_MAX and diff < 180 then
+                autoState.pressed = true -- udah kelewat, jangan dipencet
             end
         end
     end
-    autoState.lastRot, autoState.lastT = rot, now
+    autoState.lastDiff, autoState.lastT = diff, now
 end))
 
 ----------------------------------------------------------------
