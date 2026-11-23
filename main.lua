@@ -51,6 +51,8 @@ local DEFAULTS = {
     nofog = false,
     fastVault = false,
     autoPerfect = false,
+    autoLead = 1.5,
+    autoDebug = false,
     vaultSpeed = 2.0,
     vaultInfo = true,
     walkOn = false,
@@ -637,7 +639,7 @@ end))
 -- di frame berikutnya). Tiap skill check cuma ditekan SEKALI.
 local PERFECT_MIN, PERFECT_MAX, PERFECT_AIM = 104, 114, 109
 local HOLD_TIME = 0.01      -- lama tombol ditahan
-local LEAD_FRAMES = 1       -- prediksi berapa frame ke depan (naikin kalau telat)
+-- prediksi frame ke depan diatur lewat config.autoLead (input di tab Main)
 local MAX_LEAD = 12         -- batas prediksi (derajat) biar nggak kejauhan pas lag
 local SKILL_GUIS = {"SkillCheckPromptGui", "SkillCheckPromptGui-con"}
 local VIM = game:GetService("VirtualInputManager")
@@ -647,7 +649,7 @@ pcall(function()
         .Modules.Survivors.KeybindsConfig)
 end)
 
-local autoState = {lastDiff = nil, lastT = nil, goalRot = nil, pressed = false, warned = false}
+local autoState = {lastDiff = nil, lastT = nil, goalRot = nil, pressed = false, didPress = false, frames = 0, warned = false}
 
 local function findSkillCheck()
     local pg = LocalPlayer:FindFirstChild("PlayerGui")
@@ -683,7 +685,11 @@ local function pressSkillKey()
 end
 
 local function resetAuto()
-    autoState.lastDiff, autoState.lastT, autoState.goalRot, autoState.pressed = nil, nil, nil, false
+    if autoState.frames > 0 and not autoState.didPress and config.autoDebug then
+        print("[AutoPerfect] skill check selesai tanpa pencet")
+    end
+    autoState.lastDiff, autoState.lastT, autoState.goalRot = nil, nil, nil
+    autoState.pressed, autoState.didPress, autoState.frames = false, false, 0
 end
 
 -- Heartbeat (sama kayak script asli): jalan setelah game selesai update Line
@@ -705,10 +711,11 @@ track(RunService.Heartbeat:Connect(function()
 
     -- skill check baru: Goal pindah, atau jarum muter balik ke awal
     if autoState.goalRot and math.abs(goal.Rotation - autoState.goalRot) > 0.01 then
-        autoState.pressed = false
+        autoState.pressed, autoState.didPress = false, false
     end
     if last and diff < last - 180 then autoState.pressed = false end
     autoState.goalRot = goal.Rotation
+    autoState.frames += 1
 
     if last and not autoState.pressed then
         local dt = now - autoState.lastT
@@ -717,9 +724,12 @@ track(RunService.Heartbeat:Connect(function()
         local speed = dt > 0 and step / dt or 0
 
         if speed > 0 then
-            local lead = math.min(speed * dt * LEAD_FRAMES, MAX_LEAD)
+            local lead = math.min(speed * dt * config.autoLead, MAX_LEAD)
             if diff <= PERFECT_MAX and diff + lead >= PERFECT_AIM then
-                autoState.pressed = true
+                autoState.pressed, autoState.didPress = true, true
+                if config.autoDebug then
+                    print(string.format("[AutoPerfect] PRESS diff=%.1f speed=%.0f deg/s lead=%.1f", diff, speed, lead))
+                end
                 if not pressSkillKey() and not autoState.warned then
                     autoState.warned = true
                     notify("Auto Perfect: input virtual nggak didukung executor", true)
@@ -1142,6 +1152,7 @@ createInfo(mainPage, "Fast Vault cuma mempercepat ANIMASI (window max 3.0x); dur
 
 createSection(mainPage, "Generator")
 createToggle(mainPage, "Auto Perfect Skill Check", "autoPerfect")
+createInput(mainPage, "Lead Perfect (frame)", "autoLead", 0, 4)
 createInfo(mainPage, "Otomatis nekan tombol skill check pas jarum di zona perfect. Cuma jalan pas skill check biasa muncul (varian trap dilewati). Hasil perfect terus-terusan bisa kelihatan aneh buat player lain, pakai secukupnya.")
 
 createSection(mainPage, "Karakter")
@@ -1175,6 +1186,7 @@ local settingsPage = createTab("Settings")
 createSection(settingsPage, "Umum")
 createToggle(settingsPage, "Anti-AFK", "antiAfk")
 createToggle(settingsPage, "Notifikasi", "notifications")
+createToggle(settingsPage, "Debug Auto Perfect (console)", "autoDebug")
 
 createSection(settingsPage, "ESP Objek")
 createCycle(settingsPage, "distance", DISTANCE_PRESETS, function()
