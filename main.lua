@@ -1,7 +1,7 @@
--- Violence District | Menu v1.1 by jeysar
+-- Violence District | Menu v1.2 by jeysar
 -- Tab: Main, ESP, Visual, Settings
 
-local VERSION = "v1.1"
+local VERSION = "v1.2"
 
 ----------------------------------------------------------------
 -- Services
@@ -50,6 +50,7 @@ local DEFAULTS = {
     fullbright = false,
     nofog = false,
     fastVault = false,
+    autoPerfect = false,
     vaultSpeed = 2.0,
     vaultInfo = true,
     walkOn = false,
@@ -626,6 +627,97 @@ track(LocalPlayer.Idled:Connect(function()
 end))
 
 ----------------------------------------------------------------
+-- Auto Perfect Skill Check
+----------------------------------------------------------------
+-- Dari log game: Line.Rotation di 102..116 derajat di atas Goal.Rotation
+-- = PERFECT, 116..159 = good (script game: Skillcheck-gen). Jarum jalan
+-- sekitar 280 derajat/detik, jadi zona perfect cuma ~50 ms. Kita prediksi
+-- posisi jarum di frame berikutnya, lalu tekan tombol skill check lewat
+-- input virtual (jalurnya sama kayak pencet beneran: UserInputService).
+local PERFECT_MIN, PERFECT_MAX, PERFECT_AIM = 102, 116, 109
+local SKILL_GUIS = {"SkillCheckPromptGui", "SkillCheckPromptGui-con"}
+local VIM = game:GetService("VirtualInputManager")
+local KeybindsModule
+pcall(function()
+    KeybindsModule = require(game:GetService("ReplicatedStorage")
+        .Modules.Survivors.KeybindsConfig)
+end)
+
+local autoState = {lastRot = nil, lastT = nil, pressed = false, warned = false}
+
+local function findSkillCheck()
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    if not pg then return nil end
+    for _, name in ipairs(SKILL_GUIS) do
+        local g = pg:FindFirstChild(name)
+        local c = g and g:FindFirstChild("Check")
+        if c and c.Visible then return c end
+    end
+    return nil
+end
+
+local function pressSkillKey()
+    local raw = "Space"
+    if KeybindsModule and KeybindsModule.getRaw then
+        local ok, r = pcall(KeybindsModule.getRaw, "skillcheck")
+        if ok and type(r) == "string" then raw = r end
+    end
+    return pcall(function()
+        if raw == "MouseButton1" or raw == "MouseButton2" then
+            local btn = raw == "MouseButton1" and 0 or 1
+            local c = workspace.CurrentCamera.ViewportSize / 2
+            VIM:SendMouseButtonEvent(c.X, c.Y, btn, true, game, 0)
+            VIM:SendMouseButtonEvent(c.X, c.Y, btn, false, game, 0)
+        else
+            local key = Enum.KeyCode[raw]
+            VIM:SendKeyEvent(true, key, false, game)
+            task.delay(0.03, function() VIM:SendKeyEvent(false, key, false, game) end)
+        end
+    end)
+end
+
+local function resetAuto()
+    autoState.lastRot, autoState.lastT, autoState.pressed = nil, nil, false
+end
+
+track(RunService.RenderStepped:Connect(function()
+    if not config.autoPerfect then return resetAuto() end
+    local check = findSkillCheck()
+    if not check then return resetAuto() end
+
+    -- varian trap punya zona sendiri; jangan disentuh
+    local trap = check:FindFirstChild("TrapGoal")
+    if trap and trap.Visible then return end
+
+    local line, goal = check:FindFirstChild("Line"), check:FindFirstChild("Goal")
+    if not (line and goal) then return end
+
+    local now, rot = os.clock(), line.Rotation
+    local last = autoState.lastRot
+    if last and rot < last - 10 then autoState.pressed = false end -- skill check baru
+
+    if last and not autoState.pressed then
+        local dt = now - autoState.lastT
+        local speed = dt > 0 and (rot - last) / dt or 0
+        local zoneStart = goal.Rotation + PERFECT_MIN
+        local zoneEnd = goal.Rotation + PERFECT_MAX
+        local target = goal.Rotation + PERFECT_AIM
+
+        if rot > zoneEnd then
+            autoState.pressed = true -- udah kelewat, jangan dipencet
+        elseif speed > 0 and rot >= zoneStart - speed * dt
+            and rot + speed * dt >= target then
+            autoState.pressed = true
+            if not pressSkillKey() and not autoState.warned then
+                autoState.warned = true
+                notify("Auto Perfect: input virtual nggak didukung executor", true)
+            end
+        end
+    end
+    autoState.lastRot, autoState.lastT = rot, now
+end))
+
+----------------------------------------------------------------
 -- GUI: Window
 ----------------------------------------------------------------
 local main = make("Frame", {
@@ -1032,6 +1124,10 @@ createCycle(mainPage, "vaultSpeed", VAULT_PRESETS, function()
 end)
 createToggle(mainPage, "Info Vault (tier)", "vaultInfo")
 createInfo(mainPage, "Fast Vault cuma mempercepat ANIMASI (window max 3.0x); durasi vault asli diatur game per tier. Vault beneran cepat (tier FAST) didapat kalau lari kenceng + lurus ke jendela. Info Vault nunjukin tier & alasannya tiap vault: kurang kenceng / kurang lurus.")
+
+createSection(mainPage, "Generator")
+createToggle(mainPage, "Auto Perfect Skill Check", "autoPerfect")
+createInfo(mainPage, "Otomatis nekan tombol skill check pas jarum di zona perfect. Cuma jalan pas skill check biasa muncul (varian trap dilewati). Hasil perfect terus-terusan bisa kelihatan aneh buat player lain, pakai secukupnya.")
 
 createSection(mainPage, "Karakter")
 createToggle(mainPage, "Speed Karakter", "walkOn", walkStep)
