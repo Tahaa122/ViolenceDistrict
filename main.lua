@@ -30,7 +30,6 @@ print("[Violence District " .. VERSION .. "] Loading...")
 ----------------------------------------------------------------
 local COLOR_SURVIVOR = Color3.fromRGB(255, 255, 255)
 local COLOR_KILLER = Color3.fromRGB(255, 50, 50)
-local COLOR_PALLET = Color3.fromRGB(255, 200, 0)
 local COLOR_GENERATOR = Color3.fromRGB(170, 70, 255)
 
 local TOGGLE_KEY = Enum.KeyCode.RightShift
@@ -45,7 +44,6 @@ local CONFIG_FILE = "ViolenceDistrict_config.json"
 local DEFAULTS = {
     aura = false,
     name = false,
-    eyes = false,
     generator = false,
     genProgress = true,
     fullbright = false,
@@ -328,7 +326,7 @@ track(Players.PlayerAdded:Connect(setupPlayer))
 track(Players.PlayerRemoving:Connect(cleanupPlayer))
 
 ----------------------------------------------------------------
--- ESP Objek (Pallet & Generator)
+-- ESP Objek (Generator, Hook, Gate, Vault)
 ----------------------------------------------------------------
 local function progressColor(progress)
     local t = math.clamp((progress or 0) / 100, 0, 1)
@@ -340,7 +338,6 @@ local function progressColor(progress)
 end
 
 local OBJ_COLORS = {
-    pallet = COLOR_PALLET,
     generator = COLOR_GENERATOR,
     hook = Color3.fromRGB(245, 66, 90),
     gate = Color3.fromRGB(44, 194, 27),
@@ -349,15 +346,15 @@ local OBJ_COLORS = {
 -- nama model di Workspace.Map -> jenis objek
 local NAME_KINDS = {Hook = "hook", Gate = "gate", Window = "vault", Vault = "vault"}
 -- jenis objek -> field config yang mengaktifkannya
-local KIND_FLAG = {pallet = "eyes", generator = "generator", hook = "hook", gate = "gate", vault = "vault"}
+local KIND_FLAG = {generator = "generator", hook = "hook", gate = "gate", vault = "vault"}
 
 local function anyObjEnabled()
-    return config.eyes or config.generator or config.hook or config.gate or config.vault
+    return config.generator or config.hook or config.gate or config.vault
 end
 
 -- Filter berdasarkan struktur map:
---   Pallet    : Workspace.Map.pallets.<Newpallet>
 --   Generator : Model dengan atribut RepairProgress
+--   Hook / Gate / Window / Vault : Model bernama itu di Workspace.Map
 local function getKind(inst)
     if inst:IsA("Model")
         and (inst:GetAttribute("RepairProgress") ~= nil or inst.Name == "Generator") then
@@ -367,11 +364,6 @@ local function getKind(inst)
     if named and inst:IsA("Model") then
         local map = workspace:FindFirstChild("Map")
         if map and inst:IsDescendantOf(map) then return named end
-    end
-    local parent = inst.Parent
-    if parent and (inst:IsA("Model") or inst:IsA("BasePart"))
-        and string.lower(parent.Name) == "pallets" then
-        return "pallet"
     end
     return nil
 end
@@ -422,7 +414,7 @@ local function buildGenBar(d, anchor)
         BorderSizePixel = 0,
     }, d.bb)
     corner(bg, 4)
-    stroke(bg, 0.3, COLOR_PALLET)
+    stroke(bg, 0.3, COLOR_GENERATOR)
     d.fill = make("Frame", {
         Size = UDim2.new(0, 0, 1, 0),
         BackgroundColor3 = progressColor(0),
@@ -1732,23 +1724,24 @@ end
 ----------------------------------------------------------------
 -- Tab: Main
 local mainPage = createTab("Main")
-createSection(mainPage, "Gerakan")
+
+createSection(mainPage, "Generator")
+createToggle(mainPage, "Auto Perfect Skill Check", "autoPerfect")
+createInput(mainPage, "Lead Perfect (frame)", "autoLead", 0, 4)
+createInfo(mainPage, "Otomatis menekan skill check saat jarum di zona perfect (varian trap dilewati). Pakai secukupnya.")
+
+createSection(mainPage, "Vault")
 createToggle(mainPage, "Fast Vault (Pallet & Window)", "fastVault")
 createCycle(mainPage, "vaultSpeed", VAULT_PRESETS, function()
     return "Speed Vault: " .. string.format("%.1f", config.vaultSpeed) .. "x"
 end)
 createToggle(mainPage, "Info Vault (tier)", "vaultInfo")
-createInfo(mainPage, "Fast Vault cuma mempercepat ANIMASI (window max 3.0x); durasi vault asli diatur game per tier. Vault beneran cepat (tier FAST) didapat kalau lari kenceng + lurus ke jendela. Info Vault nunjukin tier & alasannya tiap vault: kurang kenceng / kurang lurus.")
-
-createSection(mainPage, "Generator")
-createToggle(mainPage, "Auto Perfect Skill Check", "autoPerfect")
-createInput(mainPage, "Lead Perfect (frame)", "autoLead", 0, 4)
-createInfo(mainPage, "Otomatis nekan tombol skill check pas jarum di zona perfect. Cuma jalan pas skill check biasa muncul (varian trap dilewati). Hasil perfect terus-terusan bisa kelihatan aneh buat player lain, pakai secukupnya.")
+createInfo(mainPage, "Fast Vault cuma mempercepat animasi (maks 3.0x). Vault tier FAST didapat kalau lari kencang dan lurus ke jendela.")
 
 createSection(mainPage, "Karakter")
 createToggle(mainPage, "Speed Karakter", "walkOn", walkStep)
 createInput(mainPage, "Speed Sprint", "walkSpeed", 10, 30, walkStep)
-createInfo(mainPage, "Ketik angka lalu Enter (10 - 30), misal 18. Aktif cuma pas sprint; speed bawaan game sprint = 17. Jalan, vault, knocked, hooked, dan carried tetap diatur game. Makin tinggi makin gampang kena anticheat, saran 18 - 20.")
+createInfo(mainPage, "Ketik angka 10 - 30 lalu Enter (bawaan game 17). Aktif cuma saat sprint. Saran 18 - 20 biar aman dari anticheat.")
 
 -- Tab: Player
 local playerPage = createTab("Player")
@@ -1790,22 +1783,18 @@ createToggle(killerPage, "Anti Blind", "antiBlind", ensureHook)
 createToggle(killerPage, "Anti Stun", "antiStun")
 createInfo(killerPage, "Cuma aktif kalau kamu Killer. Rage = serang tiap 0.1 dtk, Legit = sekali lalu jeda 2 dtk, Multi = sekali per target dalam jangkauan.")
 
-
 -- Tab: ESP
 local espPage = createTab("ESP")
 createSection(espPage, "Player")
 createToggle(espPage, "Aura Player", "aura", refreshAll)
 createToggle(espPage, "Nama & Jarak", "name", refreshAll)
 createSection(espPage, "Objek")
-createToggle(espPage, "Eyes of Heaven", "eyes", refreshObjs)
 createToggle(espPage, "Generator", "generator", refreshObjs)
 createToggle(espPage, "Progress Gen (%)", "genProgress", refreshGenAll)
 createToggle(espPage, "Hook", "hook", refreshObjs)
 createToggle(espPage, "Gate", "gate", refreshObjs)
 createToggle(espPage, "Window / Vault", "vault", refreshObjs)
-createInfo(espPage, "Putih = Survivor | Merah = Killer\nEyes of Heaven: pallet (kuning), gaya perk tapi lokal.\nGenerator: ungu + bar progress % (merah > kuning > hijau), hilang kalau sudah beres.")
-
-createInfo(espPage, "Hook = merah muda | Gate = hijau | Window/Vault = biru muda.")
+createInfo(espPage, "Putih = Survivor | Merah = Killer\nGenerator = ungu + bar progress % (merah > kuning > hijau), hilang kalau sudah beres.\nHook = merah muda | Gate = hijau | Window/Vault = biru muda.")
 
 -- Tab: Visual
 local visualPage = createTab("Visual")
